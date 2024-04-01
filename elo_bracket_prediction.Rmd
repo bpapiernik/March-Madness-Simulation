@@ -1,0 +1,1206 @@
+---
+title: "NCAA Bracket Prediction"
+author: "Jack Crilly and Brian Papiernik"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Libraries
+```{r}
+source("elo_funcs.r") # elo package
+library(tidyverse)
+library(stringr)
+library(plyr)
+library(hoopR)
+
+library(gtools) # Load gtools package
+library(RCurl) # Load RCurl
+library(png) # Load jpeg
+library(grid) # Load grid
+library(ggplot2) # Load ggplot2
+library(magick)
+```
+### Acquire Data
+
+Acquire 2023-24 NCAA game team box score data
+```{r}
+temp <- load_mbb_team_box()
+
+# gameid = id
+temp <- temp %>%
+  mutate(game_date = as.Date(game_date)) %>%
+  filter(game_date <= "2024-03-17")
+
+away_rows <- temp[which(temp$team_home_away == "away"), c(1,2,4,
+                                                          6,9:11,18)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1,2,4,
+                                                          6,9:11,18)]
+
+names(away_rows)[c(4:8)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score")
+names(home_rows)[c(4:8)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score")
+
+cbb_season_results <- cbind(home_rows, away_rows)
+
+cbb_season_results <- cbb_season_results[,-c(9,10,11)]
+
+cbb_season_results$result <- NA
+
+cbb_season_results$result[which(cbb_season_results$home_score > cbb_season_results$away_score)] <- 1
+cbb_season_results$result[which(cbb_season_results$home_score < cbb_season_results$away_score)] <- 0
+```
+
+# Elo Prediction
+
+### Calculate ELO Ratings
+```{r}
+teams <- unique(c(cbb_season_results$home_team, cbb_season_results$away_team))
+```
+
+We then need to assign an initial Elo rating for each team, we will give each team an initial value of 1,500:
+
+```{r}
+# Join teams and initial elo rating
+teams_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+# Name columns
+names(teams_elo) <- c("teams", "elo")
+# View first few rows of teams
+head(teams_elo)
+```
+
+We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
+
+```{r}
+# For each game in our dataset
+for(i in 1:nrow(cbb_season_results)){
+  # Extract match
+  game <- cbb_season_results[i,]
+  
+  # Extract team 1 Elo
+  team1_elo <- teams_elo$elo[teams_elo$team == game$home_team]
+  # Extract team 2 Elo
+  team2_elo <- teams_elo$elo[teams_elo$team == game$away_team]
+  
+  # Calculate new Elo ratings
+  new_elo <- elo.calc(wins.A = game$result,
+                      elo.A = team1_elo,
+                      elo.B = team2_elo,
+                      k= 50)
+  
+  # Store new elo ratings for home team
+  teams_elo$elo[teams_elo$team == game$home_team] <- new_elo[1,1]
+  # Store new elo ratings for away team
+  teams_elo$elo[teams_elo$team == game$away_team] <- new_elo[1,2]
+}
+```
+
+Top teams by ELO
+```{r}
+teams_elo <- teams_elo[order(teams_elo$elo, decreasing = TRUE),]
+teams_elo
+```
+
+### March Madness Bracket
+
+Create a vector of March Madness teams
+```{r}
+mm_teams <- c(#East:
+  "UConn", # 1
+  "Stetson", # 16
+  "Iowa State", # 2
+  "South Dakota State", # 15
+  "Illinois", # 3 
+  "Morehead State", # 14
+  "Auburn", # 4
+  "Yale", # 13
+  "San Diego State", # 5
+  "UAB", # 12
+  "BYU", # 6
+  "Duquesne", # 11
+  "Washington State", # 7 
+  "Drake", # 10
+  "Florida Atlantic", # 8 
+  "Northwestern", # 9  
+  
+  #West:
+  "North Carolina", # 1
+  "Wagner", # 16 
+  "Arizona", # 2
+  "Long Beach State", # 15
+  "Baylor", # 3
+  "Colgate", # 14
+  "Alabama", # 4
+  "Charleston", # 13
+  "Saint Mary's", # 5
+  "Grand Canyon", # 12
+  "Clemson", # 6
+  "New Mexico", # 11 
+  "Dayton", # 7
+  "Nevada", # 10
+  "Mississippi State", # 8
+  "Michigan State", # 9
+  
+  #South:
+  "Houston", # 1
+  "Longwood", # 16
+  "Marquette", # 2
+  "Western Kentucky", # 15
+  "Kentucky", # 3
+  "Oakland", # 14
+  "Duke", # 4
+  "Vermont", # 13
+  "Wisconsin", # 5
+  "James Madison", # 12
+  "Texas Tech", # 6
+  "NC State", # 11
+  "Florida", # 7
+  "Colorado", # 10, or Boise State
+  "Nebraska", # 8
+  "Texas A&M", # 9
+  
+  #Midwest:
+  "Purdue", # 1
+  "Grambling", # 16
+  "Tennessee", # 2
+  "Saint Peter's", # 15
+  "Creighton", # 3
+  "Akron", # 14
+  "Kansas", # 4
+  "Samford", # 13
+  "Gonzaga", # 5
+  "McNeese", # 12
+  "South Carolina", # 6
+  "Oregon", # 11
+  "Texas", # 7
+  "Colorado State",
+  "Utah State", # 8
+  "TCU" # 9
+  )
+```
+
+Acquire Elo ratings for tournament teams
+```{r}
+mm_elo <- data.frame("teams" = mm_teams, "elo" = 1500)
+
+for( i in 1:64){
+  mm_elo$elo[i] <- teams_elo[teams_elo$teams == mm_elo$teams[i],]$elo
+}
+```
+
+Create tournament system
+```{r}
+Tourney24 <-  data.frame(teams = c(#East:
+  "UConn", # 1
+  "Stetson", # 16
+  "Iowa State", # 2
+  "South Dakota State", # 15
+  "Illinois", # 3 
+  "Morehead State", # 14
+  "Auburn", # 4
+  "Yale", # 13
+  "San Diego State", # 5
+  "UAB", # 12
+  "BYU", # 6
+  "Duquesne", # 11
+  "Washington State", # 7 
+  "Drake", # 10
+  "Florida Atlantic", # 8 
+  "Northwestern", # 9  
+  
+  #West:
+  "North Carolina", # 1
+  "Wagner", # 16 
+  "Arizona", # 2
+  "Long Beach State", # 15
+  "Baylor", # 3
+  "Colgate", # 14
+  "Alabama", # 4
+  "Charleston", # 13
+  "Saint Mary's", # 5
+  "Grand Canyon", # 12
+  "Clemson", # 6
+  "New Mexico", # 11 
+  "Dayton", # 7
+  "Nevada", # 10
+  "Mississippi State", # 8
+  "Michigan State", # 9
+  
+  #South:
+  "Houston", # 1
+  "Longwood", # 16
+  "Marquette", # 2
+  "Western Kentucky", # 15
+  "Kentucky", # 3
+  "Oakland", # 14
+  "Duke", # 4
+  "Vermont", # 13
+  "Wisconsin", # 5
+  "James Madison", # 12
+  "Texas Tech", # 6
+  "NC State", # 11
+  "Florida", # 7
+  "Colorado", # 10, or Boise State
+  "Nebraska", # 8
+  "Texas A&M", # 9
+  
+  #Midwest:
+  "Purdue", # 1
+  "Grambling", # 16
+  "Tennessee", # 2
+  "Saint Peter's", # 15
+  "Creighton", # 3
+  "Akron", # 14
+  "Kansas", # 4
+  "Samford", # 13
+  "Gonzaga", # 5
+  "McNeese", # 12
+  "South Carolina", # 6
+  "Oregon", # 11
+  "Texas", # 7
+  "Colorado State", # 10
+  "Utah State", # 8
+  "TCU" # 9
+  ), 
+  
+                       seed_s = c("W01", "W16", "W02", "W15", "W03", "W14", "W04", "W13",
+                                  "W05", "W12", "W06", "W11", "W07", "W10", "W08", "W09",
+                                  "X01", "X16", "X02", "X15", "X03", "X14", "X04", "X13",
+                                  "X05", "X12", "X06", "X11", "X07", "X10", "X08", "X09",
+                                  "Y01", "Y16", "Y02", "Y15", "Y03", "Y14", "Y04", "Y13", 
+                                  "Y05", "Y12", "Y06", "Y11", "Y07", "Y10", "Y08", "Y09",
+                                  "Z01", "Z16", "Z02", "Z15", "Z03", "Z14", "Z04", "Z13",
+                                  "Z05", "Z12", "Z06", "Z11", "Z07", "Z10", "Z08", "Z09"
+                                  ), 
+                       
+                       
+                       # Work from outsides of range building into the median to create WO1 vs. WO16 and so on reference the march madness bracket. 
+                       
+                       Game1 = c( 1,1,   2,2,   3,3,   4,4,   5,5,   6,6,   7,7,   8,8,
+                                  9,9,  10,10, 11,11, 12,12, 13,13, 14,14, 15,15, 16,16,
+                                 17,17, 18,18, 19,19, 20,20, 21,21, 22,22, 23,23, 24,24,
+                                 25,25, 26,26, 27,27, 28,28, 29,29, 30,30, 31,31, 32,32
+                                 ),
+                       
+                       Game2 = c(        1,1, 2,2, 3,3, 4,4, 4,4, 3,3, 2,2, 1,1,
+                                         5,5, 6,6, 7,7, 8,8, 8,8, 7,7, 6,6, 5,5,
+                                   9,9, 10,10, 11,11, 12,12, 12,12, 11,11, 10,10, 9,9,
+                                 13,13, 14,14, 15,15, 16,16, 16,16, 15,15, 14,14, 13,13
+                                 ), # Up to 16
+  
+                       Game3 = c(1,1, 2,2, 2,2, 1,1, 1,1, 2,2, 2,2, 1,1,
+                                 3,3, 4,4, 4,4, 3,3, 3,3, 4,4, 4,4, 3,3,
+                                 5,5, 6,6, 6,6, 5,5, 5,5, 6,6, 6,6, 5,5,
+                                 7,7, 8,8, 8,8, 7,7, 7,7, 8,8, 8,8, 7,7
+                                 ), # Start with 8 1s up until 8
+  
+                       Game4 = c(rep(1,16), rep(2,16), rep(3,16), rep(4,16)), # 16 1s up until 4
+                       
+### This needs reviewed, but I am making the assumption the bracket quadrants are labeled clock wise
+### i.e. W = South, X = East, Y = West, Z = Midwest. This Means in Final 4 you have W vs. Z and X vs. Y.
+  
+                       Game5 = c(rep(1,16),rep(1,16),rep(2,16),rep(2,16)), # final 4 two games 4 numbers
+  
+                       Game6 = c(rep(1,64)) # championship 1 game 2 numbers 
+)
+```
+
+Apply Elo rating simulation
+```{r}
+elo_vals <- rep(NA, 64)
+# Add elo
+for(i in 1:64){
+  elo_vals[i] <- mm_elo[mm_elo$teams == Tourney24$teams[i],]$elo
+  #print(i)
+}
+
+Tourney24$elo <- elo_vals
+
+tourney_store <- Tourney24
+#Tourney24 <- merge(Tourney24, team_seeds24, by = "seed_s")
+#Tourney24 <- Tourney24[c(1,3:10)]
+Tourney24 <- tourney_store
+
+set.seed(5882300)
+
+round2 <-  rep(NA, 64)
+
+
+for (i in 1:32){
+  teams <-  Tourney24$teams[which(Tourney24$Game1 == i)]
+ 
+  pred <-   elo.prob(Tourney24$elo[which(Tourney24$teams == teams[1])],
+                     Tourney24$elo[which(Tourney24$teams == teams[2])])
+  
+  sim <- runif(1, min = 0, max = 1)
+  if (pred < sim){
+    round2[which(Tourney24$teams == teams[2])] <-  Tourney24$Game2[which(Tourney24$teams == teams[2])] # assign round 2 game to team 2 if they were to win the game
+    
+    new_elo <- elo.calc(wins.A = 0, # Select game outcome
+                        elo.A = Tourney24$elo[which(Tourney24$teams == teams[1])], # Set Elo for team 1
+                        elo.B = Tourney24$elo[which(Tourney24$teams == teams[2])], # Set Elo for team 2
+                        k= 20) # Set update speed  
+  }
+  else{
+    round2[which(Tourney24$teams == teams[1])] <- Tourney24$Game2[which(Tourney24$teams == teams[1])]
+    new_elo <- elo.calc(wins.A = 1, # Select game outcome
+                        elo.A = Tourney24$elo[which(Tourney24$teams == teams[1])], # Set Elo for team 1
+                        elo.B = Tourney24$elo[which(Tourney24$teams == teams[2])], # Set Elo for team 2
+                        k= 20) # Set update speed  
+    
+    }
+  # Store new Elo ratings for home team
+  Tourney24$elo[which(Tourney24$teams == teams[1])] <- new_elo[1,1]
+  # Store new Elo ratings for away team
+  Tourney24$elo[which(Tourney24$teams == teams[2])] <- new_elo[1,2]
+  }
+
+
+Tourney24$round2 <- round2
+
+
+round3 <-  rep(NA, 64)
+
+
+for (i in 1:16){
+  teams <-  Tourney24$teams[which(Tourney24$round2 == i)]
+  
+  pred <-  elo.prob(Tourney24$elo[which(Tourney24$teams == teams[1])],
+                    Tourney24$elo[which(Tourney24$teams == teams[2])])
+  sim <- runif(1, min = 0, max = 1)
+  if (pred < sim){
+    round3[which(Tourney24$teams == teams[2])] <- Tourney24$Game3[which(Tourney24$teams == teams[2])] # assign round 2 game to team 2 if they were to win the game
+    new_elo <- elo.calc(wins.A = 0, # Select game outcome
+                        elo.A = Tourney24$elo[which(Tourney24$teams == teams[1])], # Set Elo for team 1
+                        elo.B = Tourney24$elo[which(Tourney24$teams == teams[2])], # Set Elo for team 2
+                        k= 20) # Set update speed 
+    
+  }
+  else{
+    round3[which(Tourney24$teams == teams[1])] <- Tourney24$Game3[which(Tourney24$teams == teams[1])]
+    new_elo <- elo.calc(wins.A = 1, # Select game outcome
+                        elo.A = Tourney24$elo[which(Tourney24$teams == teams[1])], # Set Elo for team 1
+                        elo.B = Tourney24$elo[which(Tourney24$teams == teams[2])], # Set Elo for team 2
+                        k= 20) # Set update speed  
+  }
+  # Store new Elo ratings for home team
+  Tourney24$elo[which(Tourney24$teams == teams[1])] <- new_elo[1,1]
+  # Store new Elo ratings for away team
+  Tourney24$elo[which(Tourney24$teams == teams[2])] <- new_elo[1,2]
+}
+
+
+Tourney24$round3 <- round3
+
+
+
+round4 <-  rep(NA, 64)
+
+
+for (i in 1:8){
+  teams <-  Tourney24$teams[which(Tourney24$round3 == i)]
+
+  pred <-  elo.prob(Tourney24$elo[which(Tourney24$teams == teams[1])],
+                    Tourney24$elo[which(Tourney24$teams == teams[2])])
+  sim <- runif(1, min = 0, max = 1)
+  if (pred < sim){
+    round4[which(Tourney24$teams == teams[2])] <-  Tourney24$Game4[which(Tourney24$teams == teams[2])] # assign round 2 game to team 2 if they were to win the game
+    new_elo <- elo.calc(wins.A = 0, # Select game outcome
+                        elo.A = Tourney24$elo[which(Tourney24$teams == teams[1])], # Set Elo for team 1
+                        elo.B = Tourney24$elo[which(Tourney24$teams == teams[2])], # Set Elo for team 2
+                        k= 20) # Set update speed 
+    
+  }
+  else{
+    round4[which(Tourney24$teams == teams[1])] <- Tourney24$Game4[which(Tourney24$teams == teams[1])]
+    new_elo <- elo.calc(wins.A = 1, # Select game outcome
+                        elo.A = Tourney24$elo[which(Tourney24$teams == teams[1])], # Set Elo for team 1
+                        elo.B = Tourney24$elo[which(Tourney24$teams == teams[2])], # Set Elo for team 2
+                        k= 20) # Set update speed  
+  }
+  # Store new Elo ratings for home team
+  Tourney24$elo[which(Tourney24$teams == teams[1])] <- new_elo[1,1]
+  # Store new Elo ratings for away team
+  Tourney24$elo[which(Tourney24$teams == teams[2])] <- new_elo[1,2]
+}
+
+
+Tourney24$round4 <-  round4
+
+
+round5 <-  rep(NA, 64)
+
+
+for (i in 1:4){
+  teams <-  Tourney24$teams[which(Tourney24$round4 == i)]
+ 
+  pred <-  elo.prob(Tourney24$elo[which(Tourney24$teams == teams[1])],
+                    Tourney24$elo[which(Tourney24$teams == teams[2])])
+  sim <- runif(1, min = 0, max = 1)
+  if (pred < sim){
+    round5[which(Tourney24$teams == teams[2])] <-  Tourney24$Game5[which(Tourney24$teams == teams[2])] # assign round 2 game to team 2 if they were to win the game
+    new_elo <- elo.calc(wins.A = 0, # Select game outcome
+                        elo.A = Tourney24$elo[which(Tourney24$teams == teams[1])], # Set Elo for team 1
+                        elo.B = Tourney24$elo[which(Tourney24$teams == teams[2])], # Set Elo for team 2
+                        k= 20) # Set update speed 
+    
+  }
+  else{
+    round5[which(Tourney24$teams == teams[1])] <- Tourney24$Game5[which(Tourney24$teams == teams[1])]
+    new_elo <- elo.calc(wins.A = 1, # Select game outcome
+                        elo.A = Tourney24$elo[which(Tourney24$teams == teams[1])], # Set Elo for team 1
+                        elo.B = Tourney24$elo[which(Tourney24$teams == teams[2])], # Set Elo for team 2
+                        k= 20) # Set update speed 
+    
+  }
+  # Store new Elo ratings for home team
+  Tourney24$elo[which(Tourney24$teams == teams[1])] <- new_elo[1,1]
+  # Store new Elo ratings for away team
+  Tourney24$elo[which(Tourney24$teams == teams[2])] <- new_elo[1,2]
+}
+
+
+
+Tourney24$round5 <- round5
+
+
+
+round6 <-  rep(NA, 64) 
+
+
+for (i in 1:2){
+  teams <-  Tourney24$teams[which(Tourney24$round5 == i)]
+ 
+  pred <-  elo.prob(Tourney24$elo[which(Tourney24$teams == teams[1])],
+                    Tourney24$elo[which(Tourney24$teams == teams[2])])
+  sim <- runif(1, min = 0, max = 1)
+  if (pred < sim){
+    round6[which(Tourney24$teams == teams[2])] <-  Tourney24$Game6[which(Tourney24$teams == teams[2])] # assign round 2 game to team 2 if they were to win the game
+    new_elo <- elo.calc(wins.A = 0, # Select game outcome
+                        elo.A = Tourney24$elo[which(Tourney24$teams == teams[1])], # Set Elo for team 1
+                        elo.B = Tourney24$elo[which(Tourney24$teams == teams[2])], # Set Elo for team 2
+                        k= 20) # Set update speed 
+    
+  }
+  else{
+    round6[which(Tourney24$teams == teams[1])] <- Tourney24$Game6[which(Tourney24$teams == teams[1])]
+    new_elo <- elo.calc(wins.A = 1, # Select game outcome
+                        elo.A = Tourney24$elo[which(Tourney24$teams == teams[1])], # Set Elo for team 1
+                        elo.B = Tourney24$elo[which(Tourney24$teams == teams[2])], # Set Elo for team 2
+                        k= 20) # Set update speed 
+  }
+  # Store new Elo ratings for home team
+  Tourney24$elo[which(Tourney24$teams == teams[1])] <- new_elo[1,1]
+  # Store new Elo ratings for away team
+  Tourney24$elo[which(Tourney24$teams == teams[2])] <- new_elo[1,2]
+}
+
+
+
+Tourney24$round6 <- round6
+
+# Predict Championship
+Champ <-  rep(NA, 64)
+
+
+  teams <-  Tourney24$teams[which(Tourney24$round6 == 1)]
+  pred <-  elo.prob(Tourney24$elo[which(Tourney24$teams == teams[1])],
+                  Tourney24$elo[which(Tourney24$teams == teams[2])])
+  sim <- runif(1, min = 0, max = 1)
+  if (pred < sim){
+  Champ[which(Tourney24$teams == teams[2])] <-  Tourney24$Game6[which(Tourney24$teams == teams[2])] # assign round 2 game to team 2 if they were to win the game
+  new_elo <- elo.calc(wins.A = 0, # Select game outcome
+                      elo.A = Tourney24$elo[which(Tourney24$teams == teams[1])], # Set Elo for team 1
+                      elo.B = Tourney24$elo[which(Tourney24$teams == teams[2])], # Set Elo for team 2
+                      k= 20) # Set update speed 
+  
+}else{
+  Champ[which(Tourney24$teams == teams[1])] <- Tourney24$Game6[which(Tourney24$teams == teams[1])]
+  new_elo <- elo.calc(wins.A = 1, # Select game outcome
+                      elo.A = Tourney24$elo[which(Tourney24$teams == teams[1])], # Set Elo for team 1
+                      elo.B = Tourney24$elo[which(Tourney24$teams == teams[2])], # Set Elo for team 2
+                      k= 20) # Set update speed 
+}
+# Store new Elo ratings for home team
+Tourney24$elo[which(Tourney24$teams == teams[1])] <- new_elo[1,1]
+# Store new Elo ratings for away team
+Tourney24$elo[which(Tourney24$teams == teams[2])] <- new_elo[1,2]
+Tourney24$Champ <- Champ
+print(Tourney24$teams[which(Tourney24$Champ == 1)])
+```
+
+### Multiple Simulations
+
+Let's create the tournament system
+```{r}
+Tourney24 <-  data.frame(teams = c(#East:
+  "UConn", # 1
+  "Stetson", # 16
+  "Iowa State", # 2
+  "South Dakota State", # 15
+  "Illinois", # 3 
+  "Morehead State", # 14
+  "Auburn", # 4
+  "Yale", # 13
+  "San Diego State", # 5
+  "UAB", # 12
+  "BYU", # 6
+  "Duquesne", # 11
+  "Washington State", # 7 
+  "Drake", # 10
+  "Florida Atlantic", # 8 
+  "Northwestern", # 9  
+  
+  #West:
+  "North Carolina", # 1
+  "Wagner", # 16 
+  "Arizona", # 2
+  "Long Beach State", # 15
+  "Baylor", # 3
+  "Colgate", # 14
+  "Alabama", # 4
+  "Charleston", # 13
+  "Saint Mary's", # 5
+  "Grand Canyon", # 12
+  "Clemson", # 6
+  "New Mexico", # 11 
+  "Dayton", # 7
+  "Nevada", # 10
+  "Mississippi State", # 8
+  "Michigan State", # 9
+  
+  #South:
+  "Houston", # 1
+  "Longwood", # 16
+  "Marquette", # 2
+  "Western Kentucky", # 15
+  "Kentucky", # 3
+  "Oakland", # 14
+  "Duke", # 4
+  "Vermont", # 13
+  "Wisconsin", # 5
+  "James Madison", # 12
+  "Texas Tech", # 6
+  "NC State", # 11
+  "Florida", # 7
+  "Colorado", # 10, or Boise State
+  "Nebraska", # 8
+  "Texas A&M", # 9
+  
+  #Midwest:
+  "Purdue", # 1
+  "Grambling", # 16
+  "Tennessee", # 2
+  "Saint Peter's", # 15
+  "Creighton", # 3
+  "Akron", # 14
+  "Kansas", # 4
+  "Samford", # 13
+  "Gonzaga", # 5
+  "McNeese", # 12
+  "South Carolina", # 6
+  "Oregon", # 11
+  "Texas", # 7
+  "Colorado State", # 10
+  "Utah State", # 8
+  "TCU" # 9
+  ), 
+  
+                       seed_s = c("W01", "W16", "W02", "W15", "W03", "W14", "W04", "W13",
+                                  "W05", "W12", "W06", "W11", "W07", "W10", "W08", "W09",
+                                  "X01", "X16", "X02", "X15", "X03", "X14", "X04", "X13",
+                                  "X05", "X12", "X06", "X11", "X07", "X10", "X08", "X09",
+                                  "Y01", "Y16", "Y02", "Y15", "Y03", "Y14", "Y04", "Y13", 
+                                  "Y05", "Y12", "Y06", "Y11", "Y07", "Y10", "Y08", "Y09",
+                                  "Z01", "Z16", "Z02", "Z15", "Z03", "Z14", "Z04", "Z13",
+                                  "Z05", "Z12", "Z06", "Z11", "Z07", "Z10", "Z08", "Z09"
+                                  ), 
+                       
+                       
+                       # Work from outsides of range building into the median to create WO1 vs. WO16 and so on reference the march madness bracket. 
+                       
+                       Game1 = c( 1,1,   2,2,   3,3,   4,4,   5,5,   6,6,   7,7,   8,8,
+                                  9,9,  10,10, 11,11, 12,12, 13,13, 14,14, 15,15, 16,16,
+                                 17,17, 18,18, 19,19, 20,20, 21,21, 22,22, 23,23, 24,24,
+                                 25,25, 26,26, 27,27, 28,28, 29,29, 30,30, 31,31, 32,32
+                                 ),
+                       
+                       Game2 = c(        1,1, 2,2, 3,3, 4,4, 4,4, 3,3, 2,2, 1,1,
+                                         5,5, 6,6, 7,7, 8,8, 8,8, 7,7, 6,6, 5,5,
+                                   9,9, 10,10, 11,11, 12,12, 12,12, 11,11, 10,10, 9,9,
+                                 13,13, 14,14, 15,15, 16,16, 16,16, 15,15, 14,14, 13,13
+                                 ), # Up to 16
+  
+                       Game3 = c(1,1, 2,2, 2,2, 1,1, 1,1, 2,2, 2,2, 1,1,
+                                 3,3, 4,4, 4,4, 3,3, 3,3, 4,4, 4,4, 3,3,
+                                 5,5, 6,6, 6,6, 5,5, 5,5, 6,6, 6,6, 5,5,
+                                 7,7, 8,8, 8,8, 7,7, 7,7, 8,8, 8,8, 7,7
+                                 ), # Start with 8 1s up until 8
+  
+                       Game4 = c(rep(1,16), rep(2,16), rep(3,16), rep(4,16)), # 16 1s up until 4
+                       
+### This needs reviewed, but I am making the assumption the bracket quadrants are labeled clock wise
+### i.e. W = South, X = East, Y = West, Z = Midwest. This Means in Final 4 you have W vs. Z and X vs. Y.
+  
+                       Game5 = c(rep(1,16),rep(1,16),rep(2,16),rep(2,16)), # final 4 two games 4 numbers
+  
+                       Game6 = c(rep(1,64)) # championship 1 game 2 numbers 
+)
+
+#Apply Elo rating simulation
+elo_vals <- rep(NA, 64)
+# Add elo
+for(i in 1:64){
+  elo_vals[i] <- mm_elo[mm_elo$teams == Tourney24$teams[i],]$elo
+  #print(i)
+}
+
+Tourney24$elo <- elo_vals
+```
+
+Let's create a tournament simulation function
+```{r}
+march_madness_sim <- function(team_db, k){
+
+  Tourney <- team_db
+  
+
+  round2 <-  rep(NA, 64)
+
+
+  for (i in 1:32){
+    teams <-  Tourney$teams[which(Tourney$Game1 == i)]
+ 
+    pred <-   elo.prob(Tourney$elo[which(Tourney$teams == teams[1])],
+                       Tourney$elo[which(Tourney$teams == teams[2])])
+  
+    sim <- runif(1, min = 0, max = 1)
+    if (pred < sim){
+      round2[which(Tourney$teams == teams[2])] <-  Tourney$Game2[which(Tourney$teams == teams[2])] # assign round 2 game to team 2 if they were to win the game
+    
+      new_elo <- elo.calc(wins.A = 0, # Select game outcome
+                          elo.A = Tourney$elo[which(Tourney$teams == teams[1])], # Set Elo for team 1
+                          elo.B = Tourney$elo[which(Tourney$teams == teams[2])], # Set Elo for team 2
+                          k= 20) # Set update speed  
+    }
+    else{
+      round2[which(Tourney$teams == teams[1])] <- Tourney$Game2[which(Tourney$teams == teams[1])]
+      new_elo <- elo.calc(wins.A = 1, # Select game outcome
+                          elo.A = Tourney$elo[which(Tourney$teams == teams[1])], # Set Elo for team 1
+                          elo.B = Tourney$elo[which(Tourney$teams == teams[2])], # Set Elo for team 2
+                          k= 20) # Set update speed  
+    
+      }
+    # Store new Elo ratings for home team
+    Tourney$elo[which(Tourney$teams == teams[1])] <- new_elo[1,1]
+    # Store new Elo ratings for away team
+    Tourney$elo[which(Tourney$teams == teams[2])] <- new_elo[1,2]
+    }
+
+
+  Tourney$round2 <- round2
+
+
+  round3 <-  rep(NA, 64)
+
+
+  for (i in 1:16){
+    teams <-  Tourney$teams[which(Tourney$round2 == i)]
+  
+    pred <-  elo.prob(Tourney$elo[which(Tourney$teams == teams[1])],
+                      Tourney$elo[which(Tourney$teams == teams[2])])
+    sim <- runif(1, min = 0, max = 1)
+    if (pred < sim){
+      round3[which(Tourney$teams == teams[2])] <- Tourney$Game3[which(Tourney$teams == teams[2])] # assign round 2 game to team 2 if they were to win the game
+      new_elo <- elo.calc(wins.A = 0, # Select game outcome
+                          elo.A = Tourney$elo[which(Tourney$teams == teams[1])], # Set Elo for team 1
+                          elo.B = Tourney$elo[which(Tourney$teams == teams[2])], # Set Elo for team 2
+                          k= 20) # Set update speed 
+    
+    }
+    else{
+      round3[which(Tourney$teams == teams[1])] <- Tourney$Game3[which(Tourney$teams == teams[1])]
+      new_elo <- elo.calc(wins.A = 1, # Select game outcome
+                          elo.A = Tourney$elo[which(Tourney$teams == teams[1])], # Set Elo for team 1
+                          elo.B = Tourney$elo[which(Tourney$teams == teams[2])], # Set Elo for team 2
+                          k= 20) # Set update speed  
+    }
+    # Store new Elo ratings for home team
+    Tourney$elo[which(Tourney$teams == teams[1])] <- new_elo[1,1]
+    # Store new Elo ratings for away team
+    Tourney$elo[which(Tourney$teams == teams[2])] <- new_elo[1,2]
+  }
+
+
+  Tourney$round3 <- round3
+
+
+
+  round4 <-  rep(NA, 64)
+
+
+  for (i in 1:8){
+    teams <-  Tourney$teams[which(Tourney$round3 == i)]
+
+    pred <-  elo.prob(Tourney$elo[which(Tourney$teams == teams[1])],
+                      Tourney$elo[which(Tourney$teams == teams[2])])
+    sim <- runif(1, min = 0, max = 1)
+    if (pred < sim){
+      round4[which(Tourney$teams == teams[2])] <-  Tourney$Game4[which(Tourney$teams == teams[2])] # assign round 2 game to team 2 if they were to win the game
+      new_elo <- elo.calc(wins.A = 0, # Select game outcome
+                          elo.A = Tourney$elo[which(Tourney$teams == teams[1])], # Set Elo for team 1
+                          elo.B = Tourney$elo[which(Tourney$teams == teams[2])], # Set Elo for team 2
+                          k= 20) # Set update speed 
+    
+    }
+    else{
+      round4[which(Tourney$teams == teams[1])] <- Tourney$Game4[which(Tourney$teams == teams[1])]
+      new_elo <- elo.calc(wins.A = 1, # Select game outcome
+                          elo.A = Tourney$elo[which(Tourney$teams == teams[1])], # Set Elo for team 1
+                          elo.B = Tourney$elo[which(Tourney$teams == teams[2])], # Set Elo for team 2
+                          k= 20) # Set update speed  
+    }
+    # Store new Elo ratings for home team
+    Tourney$elo[which(Tourney$teams == teams[1])] <- new_elo[1,1]
+    # Store new Elo ratings for away team
+    Tourney$elo[which(Tourney$teams == teams[2])] <- new_elo[1,2]
+  }
+
+
+  Tourney$round4 <-  round4
+
+
+  round5 <-  rep(NA, 64)
+
+
+  for (i in 1:4){
+    teams <-  Tourney$teams[which(Tourney$round4 == i)]
+ 
+    pred <-  elo.prob(Tourney$elo[which(Tourney$teams == teams[1])],
+                      Tourney$elo[which(Tourney$teams == teams[2])])
+    sim <- runif(1, min = 0, max = 1)
+    if (pred < sim){
+      round5[which(Tourney$teams == teams[2])] <-  Tourney$Game5[which(Tourney$teams == teams[2])] # assign round 2 game to team 2 if they were to win the game
+      new_elo <- elo.calc(wins.A = 0, # Select game outcome
+                          elo.A = Tourney$elo[which(Tourney$teams == teams[1])], # Set Elo for team 1
+                          elo.B = Tourney$elo[which(Tourney$teams == teams[2])], # Set Elo for team 2
+                          k= 20) # Set update speed 
+    
+    }
+    else{
+      round5[which(Tourney$teams == teams[1])] <- Tourney$Game5[which(Tourney$teams == teams[1])]
+      new_elo <- elo.calc(wins.A = 1, # Select game outcome
+                          elo.A = Tourney$elo[which(Tourney$teams == teams[1])], # Set Elo for team 1
+                          elo.B = Tourney$elo[which(Tourney$teams == teams[2])], # Set Elo for team 2
+                          k= 20) # Set update speed 
+    
+    }
+    # Store new Elo ratings for home team
+    Tourney$elo[which(Tourney$teams == teams[1])] <- new_elo[1,1]
+    # Store new Elo ratings for away team
+    Tourney$elo[which(Tourney$teams == teams[2])] <- new_elo[1,2]
+  }
+
+
+
+  Tourney$round5 <- round5
+
+
+
+  round6 <-  rep(NA, 64) 
+
+
+  for (i in 1:2){
+    teams <-  Tourney$teams[which(Tourney$round5 == i)]
+ 
+    pred <-  elo.prob(Tourney$elo[which(Tourney$teams == teams[1])],
+                    Tourney$elo[which(Tourney$teams == teams[2])])
+    sim <- runif(1, min = 0, max = 1)
+    if (pred < sim){
+      round6[which(Tourney$teams == teams[2])] <-  Tourney$Game6[which(Tourney$teams == teams[2])] # assign round 2 game to team 2 if they were to win the game
+      new_elo <- elo.calc(wins.A = 0, # Select game outcome
+                          elo.A = Tourney$elo[which(Tourney$teams == teams[1])], # Set Elo for team 1
+                          elo.B = Tourney$elo[which(Tourney$teams == teams[2])], # Set Elo for team 2
+                          k= 20) # Set update speed 
+    
+    }
+    else{
+      round6[which(Tourney$teams == teams[1])] <- Tourney$Game6[which(Tourney$teams == teams[1])]
+      new_elo <- elo.calc(wins.A = 1, # Select game outcome
+                          elo.A = Tourney$elo[which(Tourney$teams == teams[1])], # Set Elo for team 1
+                          elo.B = Tourney$elo[which(Tourney$teams == teams[2])], # Set Elo for team 2
+                          k= 20) # Set update speed 
+    }
+    # Store new Elo ratings for home team
+    Tourney$elo[which(Tourney$teams == teams[1])] <- new_elo[1,1]
+    # Store new Elo ratings for away team
+    Tourney$elo[which(Tourney$teams == teams[2])] <- new_elo[1,2]
+  }
+
+
+
+  Tourney$round6 <- round6
+
+  # Predict Championship
+  Champ <-  rep(NA, 64)
+
+
+    teams <-  Tourney$teams[which(Tourney$round6 == 1)]
+    
+    # Join data for two teams in game to single row:
+    
+    
+    
+    pred <-  elo.prob(Tourney$elo[which(Tourney$teams == teams[1])],
+                    Tourney$elo[which(Tourney$teams == teams[2])])
+    sim <- runif(1, min = 0, max = 1)
+    if (pred < sim){
+    Champ[which(Tourney$teams == teams[2])] <-  Tourney$Game6[which(Tourney$teams == teams[2])] # assign round 2 game to team 2 if they were to win the game
+    new_elo <- elo.calc(wins.A = 0, # Select game outcome
+                        elo.A = Tourney$elo[which(Tourney$teams == teams[1])], # Set Elo for team 1
+                        elo.B = Tourney$elo[which(Tourney$teams == teams[2])], # Set Elo for team 2
+                        k= 20) # Set update speed 
+  
+  }
+  else{
+    Champ[which(Tourney$teams == teams[1])] <- Tourney$Game6[which(Tourney$teams == teams[1])]
+    new_elo <- elo.calc(wins.A = 1, # Select game outcome
+                        elo.A = Tourney$elo[which(Tourney$teams == teams[1])], # Set Elo for team 1
+                        elo.B = Tourney$elo[which(Tourney$teams == teams[2])], # Set Elo for team 2
+                        k= 20) # Set update speed 
+  }
+  # Store new Elo ratings for home team
+  Tourney$elo[which(Tourney$teams == teams[1])] <- new_elo[1,1]
+  # Store new Elo ratings for away team
+  Tourney$elo[which(Tourney$teams == teams[2])] <- new_elo[1,2]
+  Tourney$Champ <- Champ
+
+  return(Tourney)
+}
+```
+
+
+Simulating the tournament 10,000 times
+```{r}
+# Create a vector to store tournament winner
+winner <- rep(NA, 10000)
+
+round2 <- round3 <- round4 <- round5 <- round6 <- Champ <- rep(0, nrow(Tourney24))
+
+bracket_res <- data.frame(Tourney24$teams, Tourney24$seed_s)
+# For 1 to 10,000
+for(x in 1:10000){
+  # Set seed for reproducability
+  set.seed(x + 5882300)
+  # Simulate tournament
+  temp <- march_madness_sim(team_db = Tourney24, k = 50)
+  # Store sweet 16 progression
+  round2 <- round2 + !is.na(temp$round2)
+  # Store sweet 16 progression
+  round3 <- round3 + !is.na(temp$round3)
+  # Store elite 8 progression
+  round4 <- round4 + !is.na(temp$round4)
+  # Store final 4 progression
+  round5 <- round5 + !is.na(temp$round5)
+  # Store championship progression
+  round6 <- round6 + !is.na(temp$round6)
+  # Store victory
+  Champ <- Champ + !is.na(temp$Champ)
+  
+  # Extract tournament winner
+  winner[x] <- temp$teams[which(temp$Champ == 1)]
+}
+
+#Store overall bracket results
+bracket_res$round32 <- round2
+bracket_res$sweet16 <- round3
+bracket_res$elite8 <- round4
+bracket_res$final4 <- round5
+bracket_res$championship <- round6
+bracket_res$winner <- Champ
+  
+names(bracket_res)[c(1,2)] <- c("teams", "seed")
+```
+
+Let's compute the probabilities that each team will make each round
+```{r}
+bracket_prob <- bracket_res[,c(3:8)]/1000
+```
+
+
+```{r}
+bracket_temp <- bracket_prob
+bracket_temp[,] <- 0
+
+for(i in 1:max(Tourney24$Game1)){
+  bracket_temp$round32[which(Tourney24$Game1 == i)][which.max(bracket_prob$round32[which(Tourney24$Game1 == i)])] <- 1
+}
+
+for(i in 1:max(Tourney24$Game2)){
+  bracket_temp$sweet16[which(Tourney24$Game2 == i)][which.max(bracket_prob$sweet16[which(Tourney24$Game2 == i)])] <- 1
+}
+
+for(i in 1:max(Tourney24$Game3)){
+  bracket_temp$elite8[which(Tourney24$Game3 == i)][which.max(bracket_prob$elite8[which(Tourney24$Game3 == i)])] <- 1
+}
+
+for(i in 1:max(Tourney24$Game4)){
+  bracket_temp$final4[which(Tourney24$Game4 == i)][which.max(bracket_prob$final4[which(Tourney24$Game4 == i)])] <- 1
+}
+
+for(i in 1:max(Tourney24$Game5)){
+  bracket_temp$championship[which(Tourney24$Game5 == i)][which.max(bracket_prob$championship[which(Tourney24$Game5 == i)])] <- 1
+}
+
+for(i in 1:max(Tourney24$Game6)){
+  bracket_temp$winner[which(Tourney24$Game6 == i)][which.max(bracket_prob$winner[which(Tourney24$Game6 == i)])] <- 1
+}
+```
+
+```{r}
+bracket_final <- cbind.data.frame(bracket_res, bracket_temp)
+bracket_final
+```
+
+Save file as a .csv
+```{r}
+write.csv(bracket_final, "bracket_elo_prediction.csv")
+```
+
+### XGBOOST SIM
+
+```{r}
+knight <- read.csv("TournamentTeamHistoryMetrics.csv")
+```
+
+```{r}
+knight <- knight %>%
+  filter(YEAR == 2024) %>%
+  select(-c(3:5,23)) 
+summary(knight)
+
+write.csv(knight, "test.csv", row.names = FALSE)
+```
+
+
+
+```{r}
+prepare_features <- function(team1, team2, Tourney) {
+    team1_data <- Tourney[which(Tourney$teams == team1), ]
+    team2_data <- Tourney[which(Tourney$teams == team2), ]
+
+    data.frame(
+        elo_diff = team1_data$elo - team2_data$elo,
+        seed_diff = team1_data$seed - team2_data$seed,
+        win_pct_diff = team1_data$win_pct - team2_data$win_pct,
+        off_rating_diff = team1_data$off_rating - team2_data$off_rating,
+        def_rating_diff = team1_data$def_rating - team2_data$def_rating,
+        avg_points_scored_diff = team1_data$avg_points_scored - team2_data$avg_points_scored,
+        avg_points_allowed_diff = team1_data$avg_points_allowed - team2_data$avg_points_allowed,
+        experience_diff = team1_data$tournament_experience - team2_data$tournament_experience,
+        
+        # Add other features as needed
+    )
+}
+
+march_madness_sim2 <- function(team_db, bst_final) {
+    Tourney <- team_db
+    round2 <- rep(NA, nrow(Tourney))
+
+    for (i in 1:32) {
+        teams <- Tourney$teams[which(Tourney$Game1 == i)]
+
+        # Prepare the features for the XGBoost model
+        features <- prepare_features(teams[1], teams[2], Tourney)
+        
+        # convert to xbg.dmatrix
+        
+
+        
+        # Get the prediction from the XGBoost model
+        pred <- predict(bst_final, as.matrix(features), type = "prob")
+
+        sim <- runif(1)
+        if (pred < sim) {
+            round2[which(Tourney$teams == teams[2])] <- Tourney$Game2[which(Tourney$teams == teams[2])]
+        } else {
+            round2[which(Tourney$teams == teams[1])] <- Tourney$Game2[which(Tourney$teams == teams[1])]
+        }
+    }
+
+    Tourney$round2 <- round2
+    
+    round3 <- rep(NA, nrow(Tourney))
+
+    for (i in 1:16) {
+        teams <- Tourney$teams[which(Tourney$round2 == i)]
+  
+    # Check if there are two teams to compare, to avoid errors
+       if (length(teams) == 2) {
+        # Prepare the features for the XGBoost model
+            features <- prepare_features(teams[1], teams[2], Tourney)
+  
+        # Get the prediction from the XGBoost model
+         pred <- predict(bst_final, as.matrix(features), type = "prob")
+  
+         sim <- runif(1)
+        if (pred < sim) {
+            round3[which(Tourney$teams == teams[2])] <- Tourney$Game3[which(Tourney$teams == teams[2])]
+        } else {
+            round3[which(Tourney$teams == teams[1])] <- Tourney$Game3[which(Tourney$teams == teams[1])]
+        }
+      }
+   }
+
+   Tourney$round3 <- round3
+   
+   
+    round4 <- rep(NA, nrow(Tourney))
+
+    for (i in 1:8) {
+    teams <- Tourney$teams[which(Tourney$round3 == i)]
+
+    # Ensure we have two teams for the comparison
+        if (length(teams) == 2) {
+        # Prepare the features for the XGBoost model
+        features <- prepare_features(teams[1], teams[2], Tourney)
+    
+        # Get the prediction from the XGBoost model
+        pred <- predict(bst_final, as.matrix(features), type = "prob")
+  
+        sim <- runif(1)
+        if (pred < sim) {
+            round4[which(Tourney$teams == teams[2])] <- Tourney$Game4[which(Tourney$teams == teams[2])]
+        } else {
+            round4[which(Tourney$teams == teams[1])] <- Tourney$Game4[which(Tourney$teams == teams[1])]
+        }
+       }
+    }
+
+    Tourney$round4 <- round4
+    
+    round5 <- rep(NA, nrow(Tourney))
+
+    for (i in 1:4) {
+        teams <- Tourney$teams[which(Tourney$round4 == i)]
+
+        if (length(teams) == 2) {
+        # Prepare the features for the XGBoost model
+        features <- prepare_features(teams[1], teams[2], Tourney)
+
+        # Get the prediction from the XGBoost model
+        pred <- predict(bst_final, as.matrix(features), type = "prob")
+
+        sim <- runif(1)
+        if (pred < sim) {
+            round5[which(Tourney$teams == teams[2])] <- Tourney$Game5[which(Tourney$teams == teams[2])]
+        } else {
+            round5[which(Tourney$teams == teams[1])] <- Tourney$Game5[which(Tourney$teams == teams[1])]
+        }
+      }
+    }
+
+    Tourney$round5 <- round5
+    
+    round6 <- rep(NA, nrow(Tourney))
+
+    for (i in 1:2) {
+      teams <- Tourney$teams[which(Tourney$round5 == i)]
+
+        if (length(teams) == 2) {
+        # Prepare the features for the XGBoost model
+        features <- prepare_features(teams[1], teams[2], Tourney)
+
+        # Get the prediction from the XGBoost model
+        pred <- predict(bst_final, as.matrix(features), type = "prob")
+
+        sim <- runif(1)
+        if (pred < sim) {
+            round6[which(Tourney$teams == teams[2])] <- Tourney$Game6[which(Tourney$teams == teams[2])]
+        } else {
+            round6[which(Tourney$teams == teams[1])] <- Tourney$Game6[which(Tourney$teams == teams[1])]
+        }
+      }
+    }
+
+    Tourney$round6 <- round6
+
+    Champ <- rep(NA, nrow(Tourney))
+
+    teams <- Tourney$teams[which(Tourney$round6 == 1)]
+
+if (length(teams) == 2) {
+    # Prepare the features for the XGBoost model
+    features <- prepare_features(teams[1], teams[2], Tourney)
+
+    # Get the prediction from the XGBoost model
+    pred <- predict(bst_final, as.matrix(features), type = "prob")
+
+    sim <- runif(1)
+    if (pred < sim) {
+        Champ[which(Tourney$teams == teams[2])] <- Tourney$Game6[which(Tourney$teams == teams[2])]
+    } else {
+        Champ[which(Tourney$teams == teams[1])] <- Tourney$Game6[which(Tourney$teams == teams[1])]
+      }
+    }
+
+    Tourney$Champ <- Champ
+
+
+
+
+
+
+    # Repeat similar logic for round3 to round6...
+    # Ensure you update the game numbers and rounds appropriately
+
+  return(Tourney)
+}
+
+
+```
+
+```{r}
+# Ensure bst_final model is loaded and available
+
+# Create a vector to store tournament winner
+winner <- rep(NA, 10000)
+
+# Initialize counters for each round's progression
+round2 <- round3 <- round4 <- round5 <- round6 <- Champ <- rep(0, nrow(Tourney24))
+
+# Data frame to store the results
+bracket_res <- data.frame(Tourney24$teams, Tourney24$seed_s)
+merged_data <- merge(Tourney24, knight, by.x = "teams", by.y = "TEAM", all.x = TRUE)
+
+# Simulate the tournament 10,000 times
+for(x in 1:10000) {
+    set.seed(x + 5882300)  # for reproducibility
+    temp <- march_madness_sim(team_db = merged_data, bst_final)
+
+    # Accumulate the number of times each team progresses in each round
+    round2 <- round2 + !is.na(temp$round2)
+    round3 <- round3 + !is.na(temp$round3)
+    round4 <- round4 + !is.na(temp$round4)
+    round5 <- round5 + !is.na(temp$round5)
+    round6 <- round6 + !is.na(temp$round6)
+    Champ <- Champ + !is.na(temp$Champ)
+  
+    # Determine the tournament winner for each simulation
+    winner[x] <- temp$teams[which(temp$Champ == 1)]
+}
+
+# Store overall bracket results
+bracket_res$round32 <- round2
+bracket_res$sweet16 <- round3
+bracket_res$elite8 <- round4
+bracket_res$final4 <- round5
+bracket_res$championship <- round6
+bracket_res$winner <- Champ
+
+names(bracket_res)[c(1,2)] <- c("teams", "seed")
+
+```
+
