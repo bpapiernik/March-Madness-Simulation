@@ -1,6 +1,6 @@
 ---
 title: "Final XGBoost MM"
-author: "Brian Papiernik"
+author: "Brian Papiernik and Jack Crilly"
 date: "2024-03-21"
 output: html_document
 ---
