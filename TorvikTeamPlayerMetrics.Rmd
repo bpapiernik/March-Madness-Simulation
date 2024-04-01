@@ -1,0 +1,315 @@
+---
+title: "XGBoosting March"
+author: "Brian Papiernik and Jack Crilly"
+date: "2024-03-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+source("elo_funcs.r") # elo package
+library(tidyverse)
+library(stringr)
+library(plyr)
+library(hoopR)
+
+library(gtools) # Load gtools package
+library(RCurl) # Load RCurl
+library(png) # Load jpeg
+library(grid) # Load grid
+library(ggplot2) # Load ggplot2
+library(magick)
+library(dplyr)
+library(tidyr)
+
+```
+
+
+In the code below, we create multiple datasets to link the team Torvik metrics together with the player metrics from EvanMiya.com for each team's top 8 players.
+
+```{r}
+torvik2 <- read.csv("cbb.csv") 
+torvik24 <- read.csv("cbb24.csv")
+
+torvik <- rbind(torvik2, torvik24)
+```
+
+```{r}
+torvik$TEAM <- str_replace_all(torvik$TEAM, "Connecticut", "UConn")
+torvik$TEAM <- str_replace_all(torvik$TEAM, "Grambling State", "Grambling")
+torvik$TEAM <- str_replace_all(torvik$TEAM, "\\bSt\\.", "State")
+torvik$TEAM <- str_replace_all(torvik$TEAM, "North Carolina State", "NC State")
+torvik$TEAM <- str_replace_all(torvik$TEAM, "Miami FL", "Miami")
+torvik$TEAM <- str_replace(torvik$TEAM, "College of Charleston", "Charleston")
+torvik$TEAM <- str_replace(torvik$TEAM, "Texas A&M Corpus Chris", "Texas A&M-Corpus Christi")
+torvik$TEAM <- str_replace(torvik$TEAM, "State John's", "St. John's")
+torvik$TEAM <- str_replace(torvik$TEAM, "Arkansas Little Rock", "Little Rock")
+torvik$TEAM <- str_replace(torvik$TEAM, "Mississippi", "Ole Miss")
+torvik$TEAM <- str_replace(torvik$TEAM, "Ole Miss State", "Mississippi State")
+torvik$TEAM <- str_replace(torvik$TEAM, "State Bonaventure", "St. Bonaventure")
+torvik$TEAM <- str_replace(torvik$TEAM, "Mount State Mary's", "Mount St. Mary's")
+torvik$TEAM <- str_replace(torvik$TEAM, "LIU Brooklyn", "Long Island University")
+torvik$TEAM <- str_replace(torvik$TEAM, "Louisiana Lafayette", "Lafayette")
+torvik$TEAM <- str_replace(torvik$TEAM, "Gardner Webb", "Gardner-Webb")
+torvik$TEAM <- str_replace_all(torvik$TEAM, "McNeese State", "McNeese")
+torvik$TEAM <- str_replace_all(torvik$TEAM, "Grambling State", "Grambling")
+```
+
+```{r}
+torvik1 <- torvik
+```
+
+
+```{r}
+torvik$SEED <- as.numeric(torvik$SEED)
+  
+torvik <- torvik %>%
+  filter(SEED <= 16)
+```
+
+
+
+
+```{r}
+players2024 <- read.csv("evanmiyaplayer2024.csv")
+players2023 <- read.csv("evanmiyaplayer2023.csv")
+players2022 <- read.csv("evanmiyaplayer2022.csv")
+players2021 <- read.csv("evanmiyaplayer2021.csv")
+players2019 <- read.csv("evanmiyaplayer2019.csv")
+players2018 <- read.csv("evanmiyaplayer2018.csv")
+players2017 <- read.csv("evanmiyaplayer2017.csv")
+players2016 <- read.csv("evanmiyaplayer2016.csv")
+players2015 <- read.csv("evanmiyaplayer2015.csv")
+players2014 <- read.csv("evanmiyaplayer2014.csv")
+players2013 <- read.csv("evanmiyaplayer2013.csv")
+```
+
+```{r}
+players <- rbind(players2013, players2014, players2015, players2016, players2017, players2018, players2019, players2021, players2022, players2023, players2024)
+```
+
+```{r}
+players <- players %>%
+  mutate(team = case_when(
+    team == "Connecticut" ~ "UConn",
+    team == "McNeese State" ~ "McNeese",
+    team == "College of Charleston" ~ "Charleston",
+    team == "Miami (Fla.)" ~ "Miami",
+    team == "Texas A&M-Corpus Christi" ~ "Texas A&M-Corpus Christi",
+    team == "Saint John's" ~ "St. John's",
+    team == "Arkansas-Little Rock" ~ "Little Rock",
+    team == "Saint Bonaventure" ~ "St. Bonaventure",
+    team == "Long Island" ~ "Long Island University",
+    team == "Prairie View" ~ "Prairie View A&M",
+    TRUE ~ team
+  ))
+
+players <- add_row(players, team = "Hartford", Year = 2021)
+
+```
+
+
+
+
+```{r}
+teams <- torvik %>%
+  select(TEAM, YEAR)
+```
+
+```{r}
+players1 <- players %>%
+  inner_join(teams, by = c("team" = "TEAM", "Year" = "YEAR"))
+
+```
+
+```{r}
+
+players1$player_rank <- with(players1, ave(-bpr, list(team, Year), FUN = function(x) rank(x, ties.method = "first")))
+top_players1 <- players1[players1$player_rank <= 8, ]
+
+top_players1 <- top_players1 %>%
+  mutate(player_identifier = paste("Player", player_rank))
+
+
+top_players_wide <- top_players1 %>%
+  pivot_wider(
+    id_cols = c(team, Year),
+    names_from = player_identifier,
+    values_from = c(bpr, dbpr, obpr),
+    names_sep = "_"
+  )
+```
+
+```{r}
+missing_teams <- teams %>%
+  anti_join(top_players_wide, by = c("TEAM" = "team"))
+
+```
+
+
+```{r}
+top_players_wide <- top_players_wide %>%
+  select(-c(`bpr_Player 1`, `bpr_Player 2`, `bpr_Player 3`, `bpr_Player 4`, `bpr_Player 5`, `bpr_Player 6`, `bpr_Player 7`, `bpr_Player 8`))
+```
+
+
+```{r}
+Tourney24.3 <- merge(torvik, top_players_wide, by.x = c("TEAM","YEAR"), by.y = c("team","Year"))
+```
+
+
+
+
+```{r}
+total_mm_elo <- read.csv("total_mm_elo.csv")
+```
+
+DROP TEAMS THAT LOST IN FIRST FOUR
+
+```{r}
+Tourney24.4 <- merge(Tourney24.3, total_mm_elo, by.x = c("TEAM","YEAR"), by.y = c("teams", "season"), all.x = FALSE, all.y = TRUE)
+```
+
+```{r}
+write.csv(Tourney24.4, "TournamentTeamHistoryMetrics.csv", row.names = FALSE)
+```
+
+# all teams
+
+```{r}
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Arkansas Pine Bluff", "Arkansas-Pine Bluff")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "USC Upstate", "South Carolina Upstate")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Bethune Cookman", "Bethune-Cookman")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Cal Baptist", "California Baptist")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Central UConn", "Central Connecticut")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "FIU", "Florida International")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Dixie State", "Utah Tech")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Houston Baptist", "Houston Christian")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Illinois Chicago", "UIC")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Maryland Eastern Shore", "Maryland-Eastern Shore")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Louisiana Monroe", "UL Monroe")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Loyola MD", "Loyola Maryland")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Miami OH", "Miami (OH)")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Nebraska Omaha", "Omaha")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "IPFW", "Fort Wayne")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Fort Wayne", "Purdue Fort Wayne")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Ole Miss Valley State", "Mississippi Valley State")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "State Francis NY", "St. Francis (NY)")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "State Francis PA", "St. Francis (PA)")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "State Thomas", "St. Thomas-Minnesota")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "UMKC", "Kansas City")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Tennessee Martin", "UT Martin")
+torvik1$TEAM <- str_replace_all(torvik1$TEAM, "Texas A&M Commerce", "Texas A&M-Commerce")
+```
+
+```{r}
+players <- players %>%
+  mutate(team = case_when(
+    team == "Illinois-Chicago" ~ "UIC",
+    team == "Louisiana-Monroe" ~ "UL Monroe",
+    team == "Miami (Ohio)" ~ "Miami (OH)",
+    team == "Texas-Rio Grande Valley" ~ "UT Rio Grande Valley",
+    team == "Southern Mississippi" ~ "Southern Miss",
+    team == "Saint Francis (PA)" ~ "St. Francis (PA)",
+    team == "Fort Wayne" ~ "Purdue Fort Wayne",
+    team == "Saint Thomas (Minn.)" ~ "St. Thomas-Minnesota",
+    team == "Missouri-Kansas City" ~ "Kansas City",
+    team == "Tennessee-Martin" ~ "UT Martin",
+    
+    TRUE ~ team
+  ))
+
+players <- add_row(players, team = "Savannah State", Year = 2013)
+players <- add_row(players, team = "Savannah State", Year = 2014)
+players <- add_row(players, team = "Savannah State", Year = 2015)
+players <- add_row(players, team = "Savannah State", Year = 2016)
+players <- add_row(players, team = "Savannah State", Year = 2017)
+players <- add_row(players, team = "Savannah State", Year = 2018)
+players <- add_row(players, team = "Savannah State", Year = 2019)
+players <- add_row(players, team = "St. Francis (NY)", Year = 2013)
+players <- add_row(players, team = "St. Francis (NY)", Year = 2014)
+players <- add_row(players, team = "St. Francis (NY)", Year = 2015)
+players <- add_row(players, team = "St. Francis (NY)", Year = 2016)
+players <- add_row(players, team = "St. Francis (NY)", Year = 2017)
+players <- add_row(players, team = "St. Francis (NY)", Year = 2018)
+players <- add_row(players, team = "St. Francis (NY)", Year = 2019)
+players <- add_row(players, team = "St. Francis (NY)", Year = 2020)
+players <- add_row(players, team = "St. Francis (NY)", Year = 2021)
+players <- add_row(players, team = "St. Francis (NY)", Year = 2022)
+players <- add_row(players, team = "St. Francis (NY)", Year = 2023)
+```
+
+
+```{r}
+teams1 <- torvik1 %>%
+  select(TEAM, YEAR)
+```
+
+
+
+```{r}
+players1 <- players %>%
+  inner_join(teams1, by = c("team" = "TEAM", "Year" = "YEAR"))
+
+```
+
+```{r}
+
+players1$player_rank <- with(players1, ave(-bpr, list(team, Year), FUN = function(x) rank(x, ties.method = "first")))
+top_players1 <- players1[players1$player_rank <= 8, ]
+
+top_players1 <- top_players1 %>%
+  mutate(player_identifier = paste("Player", player_rank))
+
+
+top_players_wide <- top_players1 %>%
+  pivot_wider(
+    id_cols = c(team, Year),
+    names_from = player_identifier,
+    values_from = c(bpr, dbpr, obpr),
+    names_sep = "_"
+  )
+```
+
+```{r}
+missing_teams <- teams1 %>%
+  anti_join(top_players_wide, by = c("TEAM" = "team"))
+
+```
+
+```{r}
+top_players_wide <- top_players_wide %>%
+  select(-c(`bpr_Player 1`, `bpr_Player 2`, `bpr_Player 3`, `bpr_Player 4`, `bpr_Player 5`, `bpr_Player 6`, `bpr_Player 7`, `bpr_Player 8`))
+```
+
+```{r}
+all_teams <- merge(torvik1, top_players_wide, by.x = c("TEAM","YEAR"), by.y = c("team","Year"))
+```
+
+
+```{r}
+write.csv(all_teams, "allteams.csv", row.names = FALSE)
+```
+
+```{r}
+all_teams1 <- read.csv("allteams1.csv")
+```
+
+
+```{r}
+total_elo <- read.csv("final_elo.csv")
+```
+
+```{r}
+all_final_teams <- merge(all_teams1, total_elo, by.x = c("TEAM","YEAR"), by.y = c("teams", "season"), all.x = TRUE, all.y = FALSE)
+```
+
+
+```{r}
+write.csv(all_final_teams, "allfinalteams.csv", row.names = FALSE)
+```
+
