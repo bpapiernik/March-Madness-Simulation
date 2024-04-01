@@ -1,0 +1,1926 @@
+---
+title: "Elo Ratings Past 10 Years"
+author: "Jack Crilly and Brian Papiernik"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Libraries
+```{r}
+source("elo_funcs.r") # elo package
+library(tidyverse)
+library(stringr)
+library(plyr)
+library(hoopR)
+
+library(gtools) # Load gtools package
+library(RCurl) # Load RCurl
+library(png) # Load jpeg
+library(grid) # Load grid
+library(ggplot2) # Load ggplot2
+library(magick)
+```
+# Acquiring Data
+
+### 2023-24
+
+Acquire 2023-24 NCAA game team box score data
+```{r}
+temp <- load_mbb_team_box()
+
+# gameid = id
+temp <- temp %>%
+  mutate(game_date = as.Date(game_date)) %>%
+  filter(game_date <= "2024-03-17")
+
+away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+
+names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
+                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
+                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
+names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
+                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
+                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+
+cbb_season_results <- cbind(home_rows, away_rows)
+
+cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+
+cbb_season_results$result <- NA
+
+cbb_season_results$result[which(cbb_season_results$home_score > cbb_season_results$away_score)] <- 1
+cbb_season_results$result[which(cbb_season_results$home_score < cbb_season_results$away_score)] <- 0
+```
+
+Calculate ELO Ratings
+```{r}
+teams <- unique(c(cbb_season_results$home_team, cbb_season_results$away_team))
+```
+
+We then need to assign an initial Elo rating for each team, we will give each team an initial value of 1,500:
+```{r}
+# Join teams and initial elo rating
+teams_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+# Name columns
+names(teams_elo) <- c("teams", "elo")
+# View first few rows of teams
+head(teams_elo)
+```
+
+We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
+```{r}
+# For each game in our dataset
+for(i in 1:nrow(cbb_season_results)){
+  # Extract match
+  game <- cbb_season_results[i,]
+  
+  # Extract team 1 Elo
+  team1_elo <- teams_elo$elo[teams_elo$team == game$home_team]
+  # Extract team 2 Elo
+  team2_elo <- teams_elo$elo[teams_elo$team == game$away_team]
+  
+  # Calculate new Elo ratings
+  new_elo <- elo.calc(wins.A = game$result,
+                      elo.A = team1_elo,
+                      elo.B = team2_elo,
+                      k= 50)
+  
+  # Store new elo ratings for home team
+  teams_elo$elo[teams_elo$team == game$home_team] <- new_elo[1,1]
+  # Store new elo ratings for away team
+  teams_elo$elo[teams_elo$team == game$away_team] <- new_elo[1,2]
+}
+```
+
+```{r}
+teams_elo$season <- 2024
+head(teams_elo, 10)
+
+final_elo <- teams_elo
+```
+
+Filter for only March Madness teams
+```{r}
+mm_teams <- c(#East:
+  "UConn", # 1
+  "Stetson", # 16
+  "Iowa State", # 2
+  "South Dakota State", # 15
+  "Illinois", # 3 
+  "Morehead State", # 14
+  "Auburn", # 4
+  "Yale", # 13
+  "San Diego State", # 5
+  "UAB", # 12
+  "BYU", # 6
+  "Duquesne", # 11
+  "Washington State", # 7 
+  "Drake", # 10
+  "Florida Atlantic", # 8 
+  "Northwestern", # 9  
+  
+  #West:
+  "North Carolina", # 1
+  "Wagner", # 16 
+  "Arizona", # 2
+  "Long Beach State", # 15
+  "Baylor", # 3
+  "Colgate", # 14
+  "Alabama", # 4
+  "Charleston", # 13
+  "Saint Mary's", # 5
+  "Grand Canyon", # 12
+  "Clemson", # 6
+  "New Mexico", # 11 
+  "Dayton", # 7
+  "Nevada", # 10
+  "Mississippi State", # 8
+  "Michigan State", # 9
+  
+  #South:
+  "Houston", # 1
+  "Longwood", # 16
+  "Marquette", # 2
+  "Western Kentucky", # 15
+  "Kentucky", # 3
+  "Oakland", # 14
+  "Duke", # 4
+  "Vermont", # 13
+  "Wisconsin", # 5
+  "James Madison", # 12
+  "Texas Tech", # 6
+  "NC State", # 11
+  "Florida", # 7
+  "Boise State", # 10, or Colorado
+  "Nebraska", # 8
+  "Texas A&M", # 9
+  
+  #Midwest:
+  "Purdue", # 1
+  "Grambling", # 16, or Montana State
+  "Tennessee", # 2
+  "Saint Peter's", # 15
+  "Creighton", # 3
+  "Akron", # 14
+  "Kansas", # 4
+  "Samford", # 13
+  "Gonzaga", # 5
+  "McNeese", # 12
+  "South Carolina", # 6
+  "Oregon", # 11
+  "Texas", # 7
+  "Colorado State",
+  "Utah State", # 8
+  "TCU" # 9
+)
+
+mm_elo <- data.frame("teams" = mm_teams, "season" = 2024, "elo" = 1500)
+
+for( i in 1:64){
+  mm_elo$elo[i] <- teams_elo[teams_elo$teams == mm_elo$teams[i],]$elo
+}
+
+head(mm_elo)
+```
+
+```{r}
+total_cbb_season_results <- cbb_season_results
+```
+
+
+### 2022-23
+
+Acquire 2022-23 NCAA game team box score data
+```{r}
+temp <- load_mbb_team_box(seasons = 2023)
+
+# gameid = id
+temp <- temp %>%
+  mutate(game_date = as.Date(game_date)) %>%
+  filter(game_date <= "2023-03-12")
+
+away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+
+names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
+                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
+                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
+names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
+                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
+                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+
+cbb_season_results <- cbind(home_rows, away_rows)
+
+cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+
+cbb_season_results$result <- NA
+
+cbb_season_results$result[which(cbb_season_results$home_score > cbb_season_results$away_score)] <- 1
+cbb_season_results$result[which(cbb_season_results$home_score < cbb_season_results$away_score)] <- 0
+```
+
+Calculate ELO Ratings
+```{r}
+teams <- unique(c(cbb_season_results$home_team, cbb_season_results$away_team))
+```
+
+We then need to assign an initial Elo rating for each team, we will give each team an initial value of 1,500:
+
+```{r}
+# Join teams and initial elo rating
+temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+# Name columns
+names(temp_elo) <- c("teams", "elo")
+# View first few rows of teams
+head(temp_elo)
+```
+
+We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
+
+```{r}
+# For each game in our dataset
+for(i in 1:nrow(cbb_season_results)){
+  # Extract match
+  game <- cbb_season_results[i,]
+  
+  # Extract team 1 Elo
+  team1_elo <- temp_elo$elo[temp_elo$team == game$home_team]
+  # Extract team 2 Elo
+  team2_elo <- temp_elo$elo[temp_elo$team == game$away_team]
+  
+  # Calculate new Elo ratings
+  new_elo <- elo.calc(wins.A = game$result,
+                      elo.A = team1_elo,
+                      elo.B = team2_elo,
+                      k= 50)
+  
+  # Store new elo ratings for home team
+  temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  # Store new elo ratings for away team
+  temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+}
+
+temp_elo$season <- 2023
+final_elo <- rbind(final_elo,temp_elo)
+```
+
+Filter for only March Madness teams
+```{r}
+mm_teams <- c(#South:
+  "Alabama", # 1
+  "Texas A&M-Corpus Christi", # 16
+  "Arizona", # 2
+  "Princeton", # 15
+  "Baylor", # 3 
+  "UC Santa Barbara", # 14
+  "Virginia", # 4
+  "Furman", # 13
+  "San Diego State", # 5
+  "Charleston", # 12
+  "Creighton", # 6
+  "NC State", # 11
+  "Missouri", # 7 
+  "Utah State", # 10
+  "Maryland", # 8 
+  "West Virginia", # 9  
+  
+  #East:
+  "Purdue", # 1
+  "Fairleigh Dickinson", # 16 
+  "Marquette", # 2
+  "Vermont", # 15
+  "Kansas State", # 3
+  "Montana State", # 14
+  "Tennessee", # 4
+  "Louisiana", # 13
+  "Duke", # 5
+  "Oral Roberts", # 12
+  "Kentucky", # 6
+  "Providence", # 11 
+  "Michigan State", # 7
+  "USC", # 10
+  "Memphis", # 8
+  "Florida Atlantic", # 9
+  
+  #Midwest:
+  "Houston", # 1
+  "Northern Kentucky", # 16
+  "Texas", # 2
+  "Colgate", # 15
+  "Xavier", # 3
+  "Kennesaw State", # 14
+  "Indiana", # 4
+  "Kent State", # 13
+  "Miami", # 5
+  "Drake", # 12
+  "Iowa State", # 6
+  "Pittsburgh", # 11
+  "Texas A&M", # 7
+  "Penn State", # 10, or Colorado
+  "Iowa", # 8
+  "Auburn", # 9
+  
+  #West:
+  "Kansas", # 1
+  "Howard", # 16, or Montana State
+  "UCLA", # 2
+  "UNC Asheville", # 15
+  "Gonzaga", # 3
+  "Grand Canyon", # 14
+  "UConn", # 4
+  "Iona", # 13
+  "Saint Mary's", # 5
+  "VCU", # 12
+  "TCU", # 6
+  "Arizona State", # 11
+  "Northwestern", # 7
+  "Boise State",
+  "Arkansas", # 8
+  "Illinois" # 9
+)
+
+temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2023, "elo" = 1500)
+
+for(i in 1:64){
+  temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
+  #print(i)
+}
+
+head(temp_mm_elo)
+```
+
+
+```{r}
+mm_elo <- rbind(mm_elo, temp_mm_elo)
+total_cbb_season_results <- rbind(total_cbb_season_results , cbb_season_results)
+```
+
+### 2021-22
+
+Acquire 2021-22 NCAA game team box score data
+```{r}
+temp <- load_mbb_team_box(seasons = 2022)
+
+# gameid = id
+temp <- temp %>%
+  mutate(game_date = as.Date(game_date)) %>%
+  filter(game_date <= "2022-03-13")
+
+away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+
+names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
+                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
+                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
+names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
+                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
+                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+
+cbb_season_results <- cbind(home_rows, away_rows)
+
+cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+
+cbb_season_results$result <- NA
+
+cbb_season_results$result[which(cbb_season_results$home_score > cbb_season_results$away_score)] <- 1
+cbb_season_results$result[which(cbb_season_results$home_score < cbb_season_results$away_score)] <- 0
+```
+
+Calculate ELO Ratings
+```{r}
+teams <- unique(c(cbb_season_results$home_team, cbb_season_results$away_team))
+```
+
+We then need to assign an initial Elo rating for each team, we will give each team an initial value of 1,500:
+
+```{r}
+# Join teams and initial elo rating
+temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+# Name columns
+names(temp_elo) <- c("teams", "elo")
+# View first few rows of teams
+head(temp_elo)
+```
+
+We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
+
+```{r}
+# For each game in our dataset
+for(i in 1:nrow(cbb_season_results)){
+  # Extract match
+  game <- cbb_season_results[i,]
+  
+  # Extract team 1 Elo
+  team1_elo <- temp_elo$elo[temp_elo$team == game$home_team]
+  # Extract team 2 Elo
+  team2_elo <- temp_elo$elo[temp_elo$team == game$away_team]
+  
+  # Calculate new Elo ratings
+  new_elo <- elo.calc(wins.A = game$result,
+                      elo.A = team1_elo,
+                      elo.B = team2_elo,
+                      k= 50)
+  
+  # Store new elo ratings for home team
+  temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  # Store new elo ratings for away team
+  temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+}
+
+temp_elo$season <- 2022
+final_elo <- rbind(final_elo,temp_elo)
+```
+
+Filter for only March Madness teams
+```{r}
+mm_teams <- c(#West:
+  "Gonzaga", # 1
+  "Georgia State", # 16
+  "Duke", # 2
+  "Cal State Fullerton", # 15
+  "Texas Tech", # 3 
+  "Montana State", # 14
+  "Arkansas", # 4
+  "Vermont", # 13
+  "UConn", # 5
+  "New Mexico State", # 12
+  "Alabama", # 6
+  "Notre Dame", # 11
+  "Michigan State", # 7 
+  "Davidson", # 10
+  "Boise State", # 8 
+  "Memphis", # 9  
+  
+  #East:
+  "Baylor", # 1
+  "Norfolk State", # 16 
+  "Kentucky", # 2
+  "Saint Peter's", # 15
+  "Purdue", # 3
+  "Yale", # 14
+  "UCLA", # 4
+  "Akron", # 13
+  "Saint Mary's", # 5
+  "Indiana", # 12
+  "Texas", # 6
+  "Virginia Tech", # 11 
+  "Murray State", # 7
+  "San Francisco", # 10
+  "North Carolina", # 8
+  "Marquette", # 9
+  
+  #South:
+  "Arizona", # 1
+  "Wright State", # 16
+  "Villanova", # 2
+  "Delaware", # 15
+  "Tennessee", # 3
+  "Longwood", # 14
+  "Illinois", # 4
+  "Chattanooga", # 13
+  "Houston", # 5
+  "UAB", # 12
+  "Colorado State", # 6
+  "Michigan", # 11
+  "Ohio State", # 7
+  "Loyola Chicago", # 10
+  "Seton Hall", # 8
+  "TCU", # 9
+  
+  #Midwest:
+  "Kansas", # 1
+  "Texas Southern", # 16
+  "Auburn", # 2
+  "Jacksonville State", # 15
+  "Wisconsin", # 3
+  "Colgate", # 14
+  "Providence", # 4
+  "South Dakota State", # 13
+  "Iowa", # 5
+  "Richmond", # 12
+  "LSU", # 6
+  "Iowa State", # 11
+  "USC", # 7
+  "Miami", # 10
+  "San Diego State", # 8
+  "Creighton" # 9
+  )
+
+temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2022, "elo" = 1500)
+
+for(i in 1:64){
+  temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
+  #print(i)
+}
+
+head(temp_mm_elo)
+```
+
+
+```{r}
+mm_elo <- rbind(mm_elo, temp_mm_elo)
+total_cbb_season_results <- rbind(total_cbb_season_results , cbb_season_results)
+```
+
+### 2020-21
+
+Acquire 2020-21 NCAA game team box score data
+```{r}
+temp <- load_mbb_team_box(seasons = 2021) #change for correct year
+
+# gameid = id
+temp <- temp %>%
+  mutate(game_date = as.Date(game_date)) %>%
+  filter(game_date <= "2021-03-14") # end of regular season
+
+away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+
+names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
+                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
+                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
+names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
+                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
+                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+
+cbb_season_results <- cbind(home_rows, away_rows)
+
+cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+
+cbb_season_results$result <- NA
+
+cbb_season_results$result[which(cbb_season_results$home_score > cbb_season_results$away_score)] <- 1
+cbb_season_results$result[which(cbb_season_results$home_score < cbb_season_results$away_score)] <- 0
+```
+
+Calculate ELO Ratings
+```{r}
+teams <- unique(c(cbb_season_results$home_team, cbb_season_results$away_team))
+```
+
+We then need to assign an initial Elo rating for each team, we will give each team an initial value of 1,500:
+
+```{r}
+# Join teams and initial elo rating
+temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+# Name columns
+names(temp_elo) <- c("teams", "elo")
+# View first few rows of teams
+head(temp_elo)
+```
+
+We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
+
+```{r}
+# For each game in our dataset
+for(i in 1:nrow(cbb_season_results)){
+  # Extract match
+  game <- cbb_season_results[i,]
+  
+  # Extract team 1 Elo
+  team1_elo <- temp_elo$elo[temp_elo$team == game$home_team]
+  # Extract team 2 Elo
+  team2_elo <- temp_elo$elo[temp_elo$team == game$away_team]
+  
+  # Calculate new Elo ratings
+  new_elo <- elo.calc(wins.A = game$result,
+                      elo.A = team1_elo,
+                      elo.B = team2_elo,
+                      k= 50)
+  
+  # Store new elo ratings for home team
+  temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  # Store new elo ratings for away team
+  temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+}
+
+temp_elo$season <- 2021 # change for each year
+final_elo <- rbind(final_elo,temp_elo)
+```
+
+Filter for only March Madness teams
+```{r}
+mm_teams <- c(
+  # East Region:
+  "Michigan",          # 1
+  "Mount St. Mary's",  # 16
+  "LSU",               # 8
+  "St. Bonaventure",   # 9
+  "Colorado",          # 5
+  "Georgetown",        # 12
+  "Florida State",     # 4
+  "UNC Greensboro",    # 13
+  "BYU",               # 6
+  "Michigan State",    # 11
+  "Texas",             # 3
+  "Abilene Christian", # 14
+  "UConn",       # 7
+  "Maryland",          # 10
+  "Alabama",           # 2
+  "Iona",              # 15
+  
+  # West Region:
+  "Gonzaga",           # 1
+  "Norfolk State",     # 16
+  "Oklahoma",          # 8
+  "Missouri",          # 9
+  "Creighton",         # 5
+  "UC Santa Barbara",  # 12
+  "Virginia",          # 4
+  "Ohio",              # 13
+  "USC",               # 6
+  "Drake",             # 11
+  "Kansas",            # 3
+  "Eastern Washington",# 14
+  "Oregon",            # 7
+  "VCU",               # 10
+  "Iowa",              # 2
+  "Grand Canyon",      # 15
+  
+  # South Region:
+  "Baylor",            # 1
+  "Hartford",          # 16
+  "North Carolina",    # 8
+  "Wisconsin",         # 9
+  "Villanova",         # 5
+  "Winthrop",          # 12
+  "Purdue",            # 4
+  "North Texas",       # 13
+  "Texas Tech",        # 6
+  "Utah State",        # 11
+  "Arkansas",          # 3
+  "Colgate",           # 14
+  "Florida",           # 7
+  "Virginia Tech",     # 10
+  "Ohio State",        # 2
+  "Oral Roberts",      # 15
+  
+  # Midwest Region:
+  "Illinois",          # 1
+  "Drexel",            # 16
+  "Loyola Chicago",    # 8
+  "Georgia Tech",      # 9
+  "Tennessee",         # 5
+  "Oregon State",      # 12
+  "Oklahoma State",    # 4
+  "Liberty",           # 13
+  "San Diego State",   # 6
+  "Syracuse",          # 11
+  "West Virginia",     # 3
+  "Morehead State",    # 14
+  "Clemson",           # 7
+  "Rutgers",           # 10
+  "Houston",           # 2
+  "Cleveland State"    # 15
+)
+
+
+temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2021, "elo" = 1500)
+
+for(i in 1:64){
+  temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
+  #print(i)
+}
+
+head(temp_mm_elo)
+```
+
+
+```{r}
+mm_elo <- rbind(mm_elo, temp_mm_elo)
+total_cbb_season_results <- rbind(total_cbb_season_results , cbb_season_results)
+```
+
+### 2018-19
+
+Acquire 2018-19 NCAA game team box score data
+```{r}
+temp <- load_mbb_team_box(seasons = 2019) #change for correct year
+
+# gameid = id
+temp <- temp %>%
+  mutate(game_date = as.Date(game_date)) %>%
+  filter(game_date <= "2019-03-17") # end of regular season
+
+away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+
+names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
+                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
+                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
+names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
+                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
+                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+
+cbb_season_results <- cbind(home_rows, away_rows)
+
+cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+
+cbb_season_results$result <- NA
+
+cbb_season_results$result[which(cbb_season_results$home_score > cbb_season_results$away_score)] <- 1
+cbb_season_results$result[which(cbb_season_results$home_score < cbb_season_results$away_score)] <- 0
+```
+
+Calculate ELO Ratings
+```{r}
+teams <- unique(c(cbb_season_results$home_team, cbb_season_results$away_team))
+```
+
+We then need to assign an initial Elo rating for each team, we will give each team an initial value of 1,500:
+
+```{r}
+# Join teams and initial elo rating
+temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+# Name columns
+names(temp_elo) <- c("teams", "elo")
+# View first few rows of teams
+head(temp_elo)
+```
+
+We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
+
+```{r}
+# For each game in our dataset
+for(i in 1:nrow(cbb_season_results)){
+  # Extract match
+  game <- cbb_season_results[i,]
+  
+  # Extract team 1 Elo
+  team1_elo <- temp_elo$elo[temp_elo$team == game$home_team]
+  # Extract team 2 Elo
+  team2_elo <- temp_elo$elo[temp_elo$team == game$away_team]
+  
+  # Calculate new Elo ratings
+  new_elo <- elo.calc(wins.A = game$result,
+                      elo.A = team1_elo,
+                      elo.B = team2_elo,
+                      k= 50)
+  
+  # Store new elo ratings for home team
+  temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  # Store new elo ratings for away team
+  temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+}
+
+temp_elo$season <- 2019 # change for each year
+final_elo <- rbind(final_elo,temp_elo)
+```
+
+Filter for only March Madness teams
+```{r}
+mm_teams <- c(
+  # East Region:
+  "Duke",               # 1
+  "North Dakota State", # 16
+  "VCU",                # 8
+  "UCF",                # 9
+  "Mississippi State",  # 5
+  "Liberty",            # 12
+  "Virginia Tech",      # 4
+  "Saint Louis",        # 13
+  "Maryland",           # 6
+  "Belmont",            # 11
+  "LSU",                # 3
+  "Yale",               # 14
+  "Louisville",         # 7
+  "Minnesota",          # 10
+  "Michigan State",     # 2
+  "Bradley",            # 15
+  
+  # West Region:
+  "Gonzaga",            # 1
+  "Fairleigh Dickinson",# 16
+  "Syracuse",           # 8
+  "Baylor",             # 9
+  "Marquette",          # 5
+  "Murray State",       # 12
+  "Florida State",      # 4
+  "Vermont",            # 13
+  "Buffalo",            # 6
+  "Arizona State",      # 11
+  "Texas Tech",         # 3
+  "Northern Kentucky",  # 14
+  "Nevada",             # 7
+  "Florida",            # 10
+  "Michigan",           # 2
+  "Montana",            # 15
+  
+  # South Region:
+  "Virginia",           # 1
+  "Gardner-Webb",       # 16
+  "Ole Miss",           # 8
+  "Oklahoma",           # 9
+  "Wisconsin",          # 5
+  "Oregon",             # 12
+  "Kansas State",       # 4
+  "UC Irvine",          # 13
+  "Villanova",          # 6
+  "Saint Mary's",       # 11
+  "Purdue",             # 3
+  "Old Dominion",       # 14
+  "Cincinnati",         # 7
+  "Iowa",               # 10
+  "Tennessee",          # 2
+  "Colgate",            # 15
+  
+  # Midwest Region:
+  "North Carolina",     # 1
+  "Iona",               # 16
+  "Utah State",         # 8
+  "Washington",         # 9
+  "Auburn",             # 5
+  "New Mexico State",   # 12
+  "Kansas",             # 4
+  "Northeastern",       # 13
+  "Iowa State",         # 6
+  "Ohio State",         # 11
+  "Houston",            # 3
+  "Georgia State",      # 14
+  "Wofford",            # 7
+  "Seton Hall",         # 10
+  "Kentucky",           # 2
+  "Abilene Christian"   # 15
+)
+
+
+temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2019, "elo" = 1500) #change for each year
+
+for(i in 1:64){
+  temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
+  print(i)
+}
+
+head(temp_mm_elo)
+```
+
+
+```{r}
+mm_elo <- rbind(mm_elo, temp_mm_elo)
+total_cbb_season_results <- rbind(total_cbb_season_results , cbb_season_results)
+```
+
+### 2017-18
+
+Acquire 2017-18 NCAA game team box score data
+```{r}
+temp <- load_mbb_team_box(seasons = 2018) #change for correct year
+
+# gameid = id
+temp <- temp %>%
+  mutate(game_date = as.Date(game_date)) %>%
+  filter(game_date <= "2018-03-11") # end of regular season
+
+away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+
+names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
+                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
+                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
+names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
+                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
+                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+
+cbb_season_results <- cbind(home_rows, away_rows)
+
+cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+
+cbb_season_results$result <- NA
+
+cbb_season_results$result[which(cbb_season_results$home_score > cbb_season_results$away_score)] <- 1
+cbb_season_results$result[which(cbb_season_results$home_score < cbb_season_results$away_score)] <- 0
+```
+
+Calculate ELO Ratings
+```{r}
+teams <- unique(c(cbb_season_results$home_team, cbb_season_results$away_team))
+```
+
+We then need to assign an initial Elo rating for each team, we will give each team an initial value of 1,500:
+
+```{r}
+# Join teams and initial elo rating
+temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+# Name columns
+names(temp_elo) <- c("teams", "elo")
+# View first few rows of teams
+head(temp_elo)
+```
+
+We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
+
+```{r}
+# For each game in our dataset
+for(i in 1:nrow(cbb_season_results)){
+  # Extract match
+  game <- cbb_season_results[i,]
+  
+  # Extract team 1 Elo
+  team1_elo <- temp_elo$elo[temp_elo$team == game$home_team]
+  # Extract team 2 Elo
+  team2_elo <- temp_elo$elo[temp_elo$team == game$away_team]
+  
+  # Calculate new Elo ratings
+  new_elo <- elo.calc(wins.A = game$result,
+                      elo.A = team1_elo,
+                      elo.B = team2_elo,
+                      k= 50)
+  
+  # Store new elo ratings for home team
+  temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  # Store new elo ratings for away team
+  temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+}
+
+temp_elo$season <- 2018 # change for each year
+final_elo <- rbind(final_elo,temp_elo)
+```
+
+Filter for only March Madness teams
+```{r}
+mm_teams <- c(
+  # East Region:
+  "Villanova",         # 1
+  "Radford",      # 16
+  "Virginia Tech",     # 8
+  "Alabama",           # 9
+  "West Virginia",     # 5
+  "Murray State",      # 12
+  "Wichita State",     # 4
+  "Marshall",          # 13
+  "Florida",           # 6
+  "St. Bonaventure",   # 11
+  "Texas Tech",        # 3
+  "Stephen F. Austin", # 14
+  "Arkansas",          # 7
+  "Butler",            # 10
+  "Purdue",            # 2
+  "Cal State Fullerton",# 15
+  
+  # West Region:
+  "Xavier",            # 1
+  "Texas Southern",    # 16
+  "Missouri",          # 8
+  "Florida State",     # 9
+  "Ohio State",        # 5
+  "South Dakota State",# 12
+  "Gonzaga",           # 4
+  "UNC Greensboro",    # 13
+  "Houston",           # 6
+  "San Diego State",   # 11
+  "Michigan",          # 3
+  "Montana",           # 14
+  "Texas A&M",         # 7
+  "Providence",        # 10
+  "North Carolina",    # 2
+  "Lipscomb",          # 15
+  
+  # South Region:
+  "Virginia",          # 1
+  "UMBC",              # 16
+  "Creighton",         # 8
+  "Kansas State",      # 9
+  "Kentucky",          # 5
+  "Davidson",          # 12
+  "Arizona",           # 4
+  "Buffalo",           # 13
+  "Miami",        # 6
+  "Loyola Chicago",    # 11
+  "Tennessee",         # 3
+  "Wright State",      # 14
+  "Nevada",            # 7
+  "Texas",             # 10
+  "Cincinnati",        # 2
+  "Georgia State",     # 15
+  
+  # Midwest Region:
+  "Kansas",            # 1
+  "Pennsylvania",              # 16
+  "Seton Hall",        # 8
+  "NC State", # 9
+  "Clemson",           # 5
+  "New Mexico State",  # 12
+  "Auburn",            # 4
+  "Charleston",# 13
+  "TCU",               # 6
+  "Syracuse",          # 11
+  "Michigan State",    # 3
+  "Bucknell",          # 14
+  "Rhode Island",      # 7
+  "Oklahoma",          # 10
+  "Duke",              # 2
+  "Iona"               # 15
+)
+
+
+temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2018, "elo" = 1500) #change for each year
+
+for(i in 1:64){
+  temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
+  print(i)
+}
+
+head(temp_mm_elo)
+```
+
+
+```{r}
+mm_elo <- rbind(mm_elo, temp_mm_elo)
+total_cbb_season_results <- rbind(total_cbb_season_results , cbb_season_results)
+```
+
+### 2016-17
+
+Acquire 2016-17 NCAA game team box score data
+```{r}
+temp <- load_mbb_team_box(seasons = 2017) #change for correct year
+
+# gameid = id
+temp <- temp %>%
+  mutate(game_date = as.Date(game_date)) %>%
+  filter(game_date <= "2017-03-12") # end of regular season
+
+away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+
+names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
+                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
+                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
+names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
+                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
+                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+
+cbb_season_results <- cbind(home_rows, away_rows)
+
+cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+
+cbb_season_results$result <- NA
+
+cbb_season_results$result[which(cbb_season_results$home_score > cbb_season_results$away_score)] <- 1
+cbb_season_results$result[which(cbb_season_results$home_score < cbb_season_results$away_score)] <- 0
+```
+
+Calculate ELO Ratings
+```{r}
+teams <- unique(c(cbb_season_results$home_team, cbb_season_results$away_team))
+```
+
+We then need to assign an initial Elo rating for each team, we will give each team an initial value of 1,500:
+
+```{r}
+# Join teams and initial elo rating
+temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+# Name columns
+names(temp_elo) <- c("teams", "elo")
+# View first few rows of teams
+head(temp_elo)
+```
+
+We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
+
+```{r}
+# For each game in our dataset
+for(i in 1:nrow(cbb_season_results)){
+  # Extract match
+  game <- cbb_season_results[i,]
+  
+  # Extract team 1 Elo
+  team1_elo <- temp_elo$elo[temp_elo$team == game$home_team]
+  # Extract team 2 Elo
+  team2_elo <- temp_elo$elo[temp_elo$team == game$away_team]
+  
+  # Calculate new Elo ratings
+  new_elo <- elo.calc(wins.A = game$result,
+                      elo.A = team1_elo,
+                      elo.B = team2_elo,
+                      k= 50)
+  
+  # Store new elo ratings for home team
+  temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  # Store new elo ratings for away team
+  temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+}
+
+temp_elo$season <- 2017 # change for each year
+final_elo <- rbind(final_elo,temp_elo)
+```
+
+Filter for only March Madness teams
+```{r}
+mm_teams <- c(
+  # East Region:
+  "Villanova",         # 1
+  "Mount St. Mary's",  # 16
+  "Wisconsin",         # 8
+  "Virginia Tech",     # 9
+  "Virginia",          # 5
+  "UNC Wilmington",    # 12
+  "Florida",           # 4
+  "East Tennessee State", # 13
+  "SMU",               # 6
+  "Providence",        # 11
+  "Baylor",            # 3
+  "New Mexico State",  # 14
+  "South Carolina",    # 7
+  "Marquette",         # 10
+  "Duke",              # 2
+  "Troy",               # 15
+  
+  # West Region:
+  "Gonzaga",           # 1
+  "South Dakota State",   # 16
+  "Northwestern",      # 8
+  "Vanderbilt",        # 9
+  "Notre Dame",        # 5
+  "Princeton",         # 12
+  "West Virginia",     # 4
+  "Bucknell",          # 13
+  "Maryland",          # 6
+  "Xavier",            # 11
+  "Florida State",     # 3
+  "Florida Gulf Coast",# 14
+  "Saint Mary's",   # 7
+  "VCU",               # 10
+  "Arizona",           # 2
+  "North Dakota",       # 15
+  
+  # Midwest Region:
+  "Kansas",            # 1
+  "North Carolina Central",        # 16
+  "Miami",          # 8
+  "Michigan State",       # 9
+  "Iowa State",        # 5
+  "Nevada",            # 12
+  "Purdue",            # 4
+  "Vermont",           # 13
+  "Creighton",         # 6
+  "Rhode Island",      # 11
+  "Oregon",            # 3
+  "Iona",              # 14
+  "Michigan",          # 7
+  "Oklahoma State",       # 10
+  "Louisville",        # 2
+  "Jacksonville State",    # 15
+  
+  # South Region:
+  "North Carolina",    # 1
+  "Texas Southern",    # 16
+  "Arkansas",          # 8
+  "Seton Hall",        # 9
+  "Minnesota",         # 5
+  "Middle Tennessee",  # 12
+  "Butler",            # 4
+  "Winthrop",          # 13
+  "Cincinnati",        # 6
+  "Kansas State",         # 11
+  "UCLA",              # 3
+  "Kent State",        # 14
+  "Dayton",            # 7
+  "Wichita State",        # 10
+  "Kentucky",          # 2
+  "Northern Kentucky"  # 15
+)
+
+
+temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2017, "elo" = 1500) #change for each year
+
+for(i in 1:64){
+  temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
+  print(i)
+}
+
+head(temp_mm_elo)
+```
+
+
+```{r}
+mm_elo <- rbind(mm_elo, temp_mm_elo)
+total_cbb_season_results <- rbind(total_cbb_season_results , cbb_season_results)
+```
+
+### 2015-16
+
+Acquire 2015-16 NCAA game team box score data
+```{r}
+temp <- load_mbb_team_box(seasons = 2016) #change for correct year
+
+# gameid = id
+temp <- temp %>%
+  mutate(game_date = as.Date(game_date)) %>%
+  filter(game_date <= "2016-03-13") # end of regular season
+
+away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+
+names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
+                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
+                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
+names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
+                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
+                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+
+cbb_season_results <- cbind(home_rows, away_rows)
+
+cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+
+cbb_season_results$result <- NA
+
+cbb_season_results$result[which(cbb_season_results$home_score > cbb_season_results$away_score)] <- 1
+cbb_season_results$result[which(cbb_season_results$home_score < cbb_season_results$away_score)] <- 0
+```
+
+Calculate ELO Ratings
+```{r}
+teams <- unique(c(cbb_season_results$home_team, cbb_season_results$away_team))
+```
+
+We then need to assign an initial Elo rating for each team, we will give each team an initial value of 1,500:
+
+```{r}
+# Join teams and initial elo rating
+temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+# Name columns
+names(temp_elo) <- c("teams", "elo")
+# View first few rows of teams
+head(temp_elo)
+```
+
+We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
+
+```{r}
+# For each game in our dataset
+for(i in 1:nrow(cbb_season_results)){
+  # Extract match
+  game <- cbb_season_results[i,]
+  
+  # Extract team 1 Elo
+  team1_elo <- temp_elo$elo[temp_elo$team == game$home_team]
+  # Extract team 2 Elo
+  team2_elo <- temp_elo$elo[temp_elo$team == game$away_team]
+  
+  # Calculate new Elo ratings
+  new_elo <- elo.calc(wins.A = game$result,
+                      elo.A = team1_elo,
+                      elo.B = team2_elo,
+                      k= 50)
+  
+  # Store new elo ratings for home team
+  temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  # Store new elo ratings for away team
+  temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+}
+
+temp_elo$season <- 2016 # change for each year
+final_elo <- rbind(final_elo,temp_elo)
+```
+
+Filter for only March Madness teams
+```{r}
+mm_teams <- c(
+  # East Region:
+  "North Carolina",      # 1
+  "Florida Gulf Coast",  # 16
+  "USC",                 # 8
+  "Providence",          # 9
+  "Indiana",             # 5
+  "Chattanooga",         # 12
+  "Kentucky",            # 4
+  "Stony Brook",         # 13
+  "Notre Dame",          # 6
+  "Michigan",            # 11
+  "West Virginia",       # 3
+  "Stephen F. Austin",   # 14
+  "Wisconsin",           # 7
+  "Pittsburgh",          # 10
+  "Xavier",              # 2
+  "Weber State",         # 15
+  
+  # West Region:
+  "Oregon",              # 1
+  "Holy Cross",          # 16
+  "Saint Joseph's",      # 8
+  "Cincinnati",          # 9
+  "Baylor",              # 5
+  "Yale",                # 12
+  "Duke",                # 4
+  "UNC Wilmington",      # 13
+  "Texas",               # 6
+  "Northern Iowa",       # 11
+  "Texas A&M",           # 3
+  "Green Bay",           # 14
+  "Oregon State",        # 7
+  "VCU",                 # 10
+  "Oklahoma",            # 2
+  "Cal State Bakersfield",# 15
+  
+  # South Region:
+  "Kansas",              # 1
+  "Austin Peay",         # 16
+  "Colorado",            # 8
+  "UConn",         # 9
+  "Maryland",            # 5
+  "South Dakota State",  # 12
+  "California",          # 4
+  "Hawai'i",              # 13
+  "Arizona",             # 6
+  "Wichita State",       # 11
+  "Miami",          # 3
+  "Buffalo",             # 14
+  "Iowa",                # 7
+  "Temple",              # 10
+  "Villanova",           # 2
+  "UNC Asheville",       # 15
+  
+  # Midwest Region:
+  "Virginia",            # 1
+  "Hampton",             # 16
+  "Texas Tech",          # 8
+  "Butler",              # 9
+  "Purdue",              # 5
+  "Little Rock",# 12
+  "Iowa State",          # 4
+  "Iona",                # 13
+  "Seton Hall",          # 6
+  "Gonzaga",             # 11
+  "Utah",                # 3
+  "Fresno State",        # 14
+  "Dayton",              # 7
+  "Syracuse",            # 10
+  "Michigan State",      # 2
+  "Middle Tennessee"     # 15
+)
+
+
+temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2016, "elo" = 1500) #change for each year
+
+for(i in 1:64){
+  temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
+  print(i)
+}
+
+head(temp_mm_elo)
+```
+
+
+```{r}
+mm_elo <- rbind(mm_elo, temp_mm_elo)
+total_cbb_season_results <- rbind(total_cbb_season_results , cbb_season_results)
+```
+
+### 2014-15
+
+Acquire 2014-2015 NCAA game team box score data
+```{r}
+temp <- load_mbb_team_box(seasons = 2015) #change for correct year
+
+# gameid = id
+temp <- temp %>%
+  mutate(game_date = as.Date(game_date)) %>%
+  filter(game_date <= "2015-03-15") # end of regular season
+
+away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+
+names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
+                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
+                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
+names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
+                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
+                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+
+cbb_season_results <- cbind(home_rows, away_rows)
+
+cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+
+cbb_season_results$result <- NA
+
+cbb_season_results$result[which(cbb_season_results$home_score > cbb_season_results$away_score)] <- 1
+cbb_season_results$result[which(cbb_season_results$home_score < cbb_season_results$away_score)] <- 0
+```
+
+Calculate ELO Ratings
+```{r}
+teams <- unique(c(cbb_season_results$home_team, cbb_season_results$away_team))
+```
+
+We then need to assign an initial Elo rating for each team, we will give each team an initial value of 1,500:
+
+```{r}
+# Join teams and initial elo rating
+temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+# Name columns
+names(temp_elo) <- c("teams", "elo")
+# View first few rows of teams
+head(temp_elo)
+```
+
+We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
+
+```{r}
+# For each game in our dataset
+for(i in 1:nrow(cbb_season_results)){
+  # Extract match
+  game <- cbb_season_results[i,]
+  
+  # Extract team 1 Elo
+  team1_elo <- temp_elo$elo[temp_elo$team == game$home_team]
+  # Extract team 2 Elo
+  team2_elo <- temp_elo$elo[temp_elo$team == game$away_team]
+  
+  # Calculate new Elo ratings
+  new_elo <- elo.calc(wins.A = game$result,
+                      elo.A = team1_elo,
+                      elo.B = team2_elo,
+                      k= 50)
+  
+  # Store new elo ratings for home team
+  temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  # Store new elo ratings for away team
+  temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+}
+
+temp_elo$season <- 2015 # change for each year
+final_elo <- rbind(final_elo,temp_elo)
+```
+
+Filter for only March Madness teams
+```{r}
+mm_teams <- c(
+  # Midwest Region
+  "Kentucky",            # 1
+  "Hampton",             # 16
+  "Cincinnati",          # 8
+  "Purdue",              # 9
+  "West Virginia",       # 5
+  "Buffalo",             # 12
+  "Maryland",            # 4
+  "Valparaiso",          # 13
+  "Butler",              # 6
+  "Texas",               # 11
+  "Notre Dame",          # 3
+  "Northeastern",        # 14
+  "Wichita State",       # 7
+  "Indiana",             # 10
+  "Kansas",              # 2
+  "New Mexico State",    # 15
+
+  # West Region
+  "Wisconsin",           # 1
+  "Coastal Carolina",    # 16
+  "Oregon",              # 8
+  "Oklahoma State",      # 9
+  "Arkansas",            # 5
+  "Wofford",             # 12
+  "North Carolina",      # 4
+  "Harvard",             # 13
+  "Xavier",              # 6
+  "Ole Miss",        # 11
+  "Baylor",              # 3
+  "Georgia State",       # 14
+  "VCU",                 # 7
+  "Ohio State",          # 10
+  "Arizona",             # 2
+  "Texas Southern",      # 15
+
+  # East Region
+  "Villanova",           # 1
+  "Lafayette",           # 16
+  "NC State",            # 8
+  "LSU",                 # 9
+  "Northern Iowa",       # 5
+  "Wyoming",             # 12
+  "Louisville",          # 4
+  "UC Irvine",           # 13
+  "Providence",          # 6
+  "Dayton",  # 11
+  "Oklahoma",            # 3
+  "Albany",              # 14
+  "Michigan State",      # 7
+  "Georgia",             # 10
+  "Virginia",            # 2
+  "Belmont",             # 15
+
+  # South Region
+  "Duke",                # 1
+  "Robert Morris", # 16
+  "San Diego State",     # 8
+  "St. John's",          # 9
+  "Utah",                # 5
+  "Stephen F. Austin",   # 12
+  "Georgetown",          # 4
+  "Eastern Washington",  # 13
+  "SMU",                 # 6
+  "UCLA",                # 11
+  "Iowa State",          # 3
+  "UAB",                 # 14
+  "Iowa",                # 7
+  "Davidson",            # 10
+  "Gonzaga",             # 2
+  "North Dakota State"   # 15
+)
+
+
+temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2015, "elo" = 1500) #change for each year
+
+for(i in 1:64){
+  temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
+  print(i)
+}
+
+head(temp_mm_elo)
+```
+
+
+```{r}
+mm_elo <- rbind(mm_elo, temp_mm_elo)
+total_cbb_season_results <- rbind(total_cbb_season_results , cbb_season_results)
+```
+
+### 2013-2014
+
+Acquire 2013-14 NCAA game team box score data
+```{r}
+temp <- load_mbb_team_box(seasons = 2014) #change for correct year
+
+# gameid = id
+temp <- temp %>%
+  mutate(game_date = as.Date(game_date)) %>%
+  filter(game_date <= "2014-03-16") # end of regular season
+
+away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+
+names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
+                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
+                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
+names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
+                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
+                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+
+cbb_season_results <- cbind(home_rows, away_rows)
+
+cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+
+cbb_season_results$result <- NA
+
+cbb_season_results$result[which(cbb_season_results$home_score > cbb_season_results$away_score)] <- 1
+cbb_season_results$result[which(cbb_season_results$home_score < cbb_season_results$away_score)] <- 0
+```
+
+Calculate ELO Ratings
+```{r}
+teams <- unique(c(cbb_season_results$home_team, cbb_season_results$away_team))
+```
+
+We then need to assign an initial Elo rating for each team, we will give each team an initial value of 1,500:
+
+```{r}
+# Join teams and initial elo rating
+temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+# Name columns
+names(temp_elo) <- c("teams", "elo")
+# View first few rows of teams
+head(temp_elo)
+```
+
+We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
+
+```{r}
+# For each game in our dataset
+for(i in 1:nrow(cbb_season_results)){
+  # Extract match
+  game <- cbb_season_results[i,]
+  
+  # Extract team 1 Elo
+  team1_elo <- temp_elo$elo[temp_elo$team == game$home_team]
+  # Extract team 2 Elo
+  team2_elo <- temp_elo$elo[temp_elo$team == game$away_team]
+  
+  # Calculate new Elo ratings
+  new_elo <- elo.calc(wins.A = game$result,
+                      elo.A = team1_elo,
+                      elo.B = team2_elo,
+                      k= 50)
+  
+  # Store new elo ratings for home team
+  temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  # Store new elo ratings for away team
+  temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+}
+
+temp_elo$season <- 2014 # change for each year
+final_elo <- rbind(final_elo,temp_elo)
+```
+
+Filter for only March Madness teams
+```{r}
+mm_teams <- c(
+  # South Region
+  "Florida",            # 1
+  "Albany", # 16
+  "Colorado",           # 8
+  "Pittsburgh",         # 9
+  "VCU",                # 5
+  "Stephen F. Austin",  # 12
+  "UCLA",               # 4
+  "Tulsa",              # 13
+  "Ohio State",         # 6
+  "Dayton",             # 11
+  "Syracuse",           # 3
+  "Western Michigan",   # 14
+  "New Mexico",         # 7
+  "Stanford",           # 10
+  "Kansas",             # 2
+  "Eastern Kentucky",   # 15
+
+  # East Region
+  "Virginia",           # 1
+  "Coastal Carolina",   # 16
+  "Memphis",            # 8
+  "George Washington",  # 9
+  "Cincinnati",         # 5
+  "Harvard",            # 12
+  "Michigan State",     # 4
+  "Delaware",           # 13
+  "North Carolina",     # 6
+  "Providence",         # 11
+  "Iowa State",         # 3
+  "North Carolina Central", # 14
+  "UConn",        # 7
+  "Saint Joseph's",     # 10
+  "Villanova",          # 2
+  "Milwaukee",          # 15
+
+  # West Region
+  "Arizona",            # 1
+  "Weber State",        # 16
+  "Gonzaga",            # 8
+  "Oklahoma State",     # 9
+  "Oklahoma",           # 5
+  "North Dakota State", # 12
+  "San Diego State",    # 4
+  "New Mexico State",   # 13
+  "Baylor",             # 6
+  "Nebraska",           # 11
+  "Creighton",          # 3
+  "Lafayette",# 14
+  "Oregon",             # 7
+  "BYU",                # 10
+  "Wisconsin",          # 2
+  "American University",           # 15
+
+  # Midwest Region
+  "Wichita State",      # 1
+  "Cal Poly", # 16
+  "Kentucky",           # 8
+  "Kansas State",       # 9
+  "Saint Louis",        # 5
+  "NC State",    # 12
+  "Louisville",         # 4
+  "Manhattan",          # 13
+  "UMass",      # 6
+  "Tennessee",     # 11
+  "Duke",               # 3
+  "Mercer",             # 14
+  "Texas",              # 7
+  "Arizona State",      # 10
+  "Michigan",           # 2
+  "Wofford"             # 15
+)
+
+
+
+temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2014, "elo" = 1500) #change for each year
+
+for(i in 1:64){
+  temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
+  print(i)
+}
+
+head(temp_mm_elo)
+```
+
+
+```{r}
+mm_elo <- rbind(mm_elo, temp_mm_elo)
+total_cbb_season_results <- rbind(total_cbb_season_results , cbb_season_results)
+```
+
+### 2012-2013
+
+Acquire 2012-13 NCAA game team box score data
+```{r}
+temp <- load_mbb_team_box(seasons = 2013) #change for correct year
+
+# gameid = id
+temp <- temp %>%
+  mutate(game_date = as.Date(game_date)) %>%
+  filter(game_date <= "2013-03-17") # end of regular season
+
+away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+
+names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
+                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
+                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
+names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
+                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
+                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+
+cbb_season_results <- cbind(home_rows, away_rows)
+
+cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+
+cbb_season_results$result <- NA
+
+cbb_season_results$result[which(cbb_season_results$home_score > cbb_season_results$away_score)] <- 1
+cbb_season_results$result[which(cbb_season_results$home_score < cbb_season_results$away_score)] <- 0
+```
+
+Calculate ELO Ratings
+```{r}
+teams <- unique(c(cbb_season_results$home_team, cbb_season_results$away_team))
+```
+
+We then need to assign an initial Elo rating for each team, we will give each team an initial value of 1,500:
+
+```{r}
+# Join teams and initial elo rating
+temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+# Name columns
+names(temp_elo) <- c("teams", "elo")
+# View first few rows of teams
+head(temp_elo)
+```
+
+We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
+
+```{r}
+# For each game in our dataset
+for(i in 1:nrow(cbb_season_results)){
+  # Extract match
+  game <- cbb_season_results[i,]
+  
+  # Extract team 1 Elo
+  team1_elo <- temp_elo$elo[temp_elo$team == game$home_team]
+  # Extract team 2 Elo
+  team2_elo <- temp_elo$elo[temp_elo$team == game$away_team]
+  
+  # Calculate new Elo ratings
+  new_elo <- elo.calc(wins.A = game$result,
+                      elo.A = team1_elo,
+                      elo.B = team2_elo,
+                      k= 50)
+  
+  # Store new elo ratings for home team
+  temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  # Store new elo ratings for away team
+  temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+}
+
+temp_elo$season <- 2013 # change for each year
+final_elo <- rbind(final_elo,temp_elo)
+```
+
+```{r}
+write.csv(final_elo, "final_elo.csv", row.names = FALSE)
+```
+
+Filter for only March Madness teams
+```{r}
+mm_teams <- c(
+  # Midwest Region
+  "Louisville",           # 1
+  "North Carolina A&T",   # 16
+  "Colorado State",       # 8
+  "Missouri",             # 9
+  "Oklahoma State",       # 5
+  "Oregon",               # 12
+  "Saint Louis",          # 4
+  "New Mexico State",     # 13
+  "Memphis",              # 6
+  "Saint Mary's",         # 11
+  "Michigan State",       # 3
+  "Valparaiso",           # 14
+  "Creighton",            # 7
+  "Cincinnati",           # 10
+  "Duke",                 # 2
+  "Albany",               # 15
+
+  # West Region
+  "Gonzaga",              # 1
+  "Southern",             # 16
+  "Pittsburgh",           # 8
+  "Wichita State",        # 9
+  "Wisconsin",            # 5
+  "Ole Miss",          # 12
+  "Kansas State",         # 4
+  "La Salle",             # 13
+  "Arizona",              # 6
+  "Belmont",              # 11
+  "New Mexico",           # 3
+  "Harvard",              # 14
+  "Notre Dame",           # 7
+  "Iowa State",           # 10
+  "Ohio State",           # 2
+  "Iona",                 # 15
+
+  # South Region
+  "Kansas",               # 1
+  "Western Kentucky",     # 16
+  "North Carolina",       # 8
+  "Villanova",            # 9
+  "VCU",                  # 5
+  "Akron",                # 12
+  "Michigan",             # 4
+  "South Dakota State",   # 13
+  "UCLA",                 # 6
+  "Minnesota",            # 11
+  "Florida",              # 3
+  "Northwestern State",   # 14
+  "San Diego State",      # 7
+  "Oklahoma",             # 10
+  "Georgetown",           # 2
+  "Florida Gulf Coast",   # 15
+
+  # East Region
+  "Indiana",              # 1
+  "James Madison",        # 16
+  "NC State",             # 8
+  "Temple",               # 9
+  "UNLV",                 # 5
+  "California",           # 12
+  "Syracuse",             # 4
+  "Montana",              # 13
+  "Butler",               # 6
+  "Bucknell",             # 11
+  "Marquette",            # 3
+  "Davidson",             # 14
+  "Illinois",             # 7
+  "Colorado",             # 10
+  "Miami",           # 2
+  "Pacific"               # 15
+)
+
+
+
+temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2013, "elo" = 1500) #change for each year
+
+for(i in 1:64){
+  temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
+  print(i)
+}
+
+head(temp_mm_elo)
+```
+
+
+```{r}
+mm_elo <- rbind(mm_elo, temp_mm_elo)
+total_cbb_season_results <- rbind(total_cbb_season_results , cbb_season_results)
+```
+
+```{r}
+write.csv(mm_elo, "total_mm_elo.csv", row.names = FALSE)
+write.csv(total_cbb_season_results, "historic_regular_season1.csv", row.names = FALSE)
+```
+
+
+# March Madness Games
+### 2022-2023
+
+```{r}
+temp <- load_mbb_team_box(seasons = 2023)
+
+# gameid = id
+temp <- temp %>%
+  mutate(game_date = as.Date(game_date)) %>%
+  filter(game_date > "2023-03-12")
+
+away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+
+names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
+                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
+                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
+names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
+                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
+                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+
+cbb_season_results <- cbind(home_rows, away_rows)
+
+cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+
+cbb_season_results$result <- NA
+
+cbb_season_results$result[which(cbb_season_results$home_score > cbb_season_results$away_score)] <- 1
+cbb_season_results$result[which(cbb_season_results$home_score < cbb_season_results$away_score)] <- 0
+```
+
+
+
