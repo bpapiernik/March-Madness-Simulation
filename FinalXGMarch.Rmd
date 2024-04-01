@@ -1,0 +1,1047 @@
+---
+title: "Final XGBoost MM"
+author: "Brian Papiernik"
+date: "2024-03-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+
+
+
+
+
+library(randomForest) # Load randomForest package to run bagging
+library(rpart) # Load rpart for decision trees
+library(caret) # Used for analysing results
+library(splitstackshape) # Used for stratified sampling
+
+
+
+
+library(xgboost) # Load XGBoost
+
+library(pROC) # Load proc
+library(SHAPforxgboost) # Load shap for XGBoost
+library(caTools)
+
+library(GGally)
+
+
+library(data.table)
+library(gh)
+library(commonmark)
+library(xgboostExplainer)
+
+```
+
+```{r}
+
+# the dataset "cbb_season_results" contains all of the regular season games for the March Madness tournament teams from 2013 to 2024
+
+cbb_season_results <- read.csv("historic_regular_season.csv")
+
+# the dataset "metrics" contains all of the team statistical and player metrics for the March Madness tournament teams from 2013 to 2024
+
+metrics <- read.csv("TournamentTeamHistoryMetrics.csv")
+
+# the dataset "mm" contains all of the March Madness tournament games for the March Madness tournament teams from 2013 to 2024
+
+mm <- read.csv("mm_box_scores.csv")
+
+
+
+mm$game_date <- as.Date(mm$game_date)
+mm$game_date_time <- as.Date((mm$game_date_time))
+cbb_season_results$game_date_time <- as.Date(cbb_season_results$game_date_time)
+
+```
+
+In the chunk below, we merge the rows for the cbb_season_results and mm dataset so that all the regular season and postseason games are included in one singular dataset
+```{r}
+total_games1 <- rbind(cbb_season_results, mm)
+```
+
+
+
+Some of the teams didn't have player statistical metrics for their 7th or 8th best players, so we decided to replace all of the na values with 0.
+
+```{r}
+metrics <- metrics %>%
+  mutate_at(.vars = 25:40, .funs = ~replace(., is.na(.), 0))
+```
+
+In the code below, we merge the team/player metrics with the games dataset based on team and year.
+
+```{r}
+naismith <- merge(total_games1, metrics, by.x = c("team_location", "season"), by.y = c("TEAM", "YEAR"))
+naismith
+```
+
+The metrics2 dataset includes all of the team statistics and players metrics for every team from 2013 to 2024 no matter if they made the March Madness tournament or not.
+
+```{r}
+metrics2 <- read.csv("allfinalteams.csv")
+```
+
+
+Some of the teams didn't have player statistical metrics for their 7th or 8th best players, so we decided to replace all of the na values with 0.
+
+```{r}
+metrics2 <- metrics2 %>%
+  mutate_at(.vars = 25:40, .funs = ~replace(., is.na(.), 0))
+```
+
+We decided to change the metrics2 dataset to the opponent metrics and added the prefix opp_ to every column. This will be useful below in the chunk below when we merge the opp team metrics on the game results "naismith" data.
+
+```{r}
+opp_metrics <- metrics2 %>%
+  rename_with(~paste0("opp_",.), everything())
+```
+
+In the chunk below, we merge the opponent team metrics on the game results "naismith" data. This dataset "naismith" is a lot larger because it contains games with all opponents instead of just the March Madness opponents.
+
+
+```{r}
+naismith1 <- merge(naismith, opp_metrics, by.x = c("opponent_team_location", "season"), by.y = c("opp_TEAM", "opp_YEAR"), all.x = TRUE, all.y = FALSE)
+naismith1
+```
+
+Exploratory to see how many games had na values for opponent metrics.
+
+```{r}
+naismith_nulls <- naismith1[is.na(naismith1$opp_BARTHAG),]
+```
+
+```{r}
+teams <- data.frame(unique(naismith_nulls$opponent_team_location))
+
+```
+
+Here we eliminate the rows (games) were there are na values for opponent team metrics.
+
+```{r}
+naismith1_no_nulls <- naismith1[!is.na(naismith1$opp_BARTHAG),]
+naismith1_no_nulls
+```
+
+In the code below, we select only the columns that are related to team metrics and opponent team metrics with our dependent variable "team winner" that indicates if the march madness team ended up winning the game or not. After, we switched the Boolean to a binary variable
+
+```{r}
+james_naismith <- naismith1_no_nulls %>%
+  select(c(1:3,20,58:74,76:93,97:113,116:132)) %>%
+  mutate(team_winner = ifelse(team_winner == TRUE, 1, 0))
+
+james_naismith
+
+
+```
+
+In the code below, we create differential variables based on the different team metrics and subtracting these team metrics by the opponent team metrics.
+
+```{r}
+# Initialize the new data frame as a copy of the original
+james_naismith_diff = james_naismith
+
+# Loop through the column pairs and calculate differences, then rename using the 5th column's name
+for (i in 5:21) {
+  column_name = names(james_naismith)[i]
+  new_column_name = paste("diff", column_name, sep = "_")
+  james_naismith_diff[[new_column_name]] = james_naismith[[i]] - james_naismith[[i + 35]]
+}
+
+# Continue with the additional pairs after skipping column 22
+for (i in 23:39) {
+  column_name = names(james_naismith)[i]
+  new_column_name = paste("diff", column_name, sep = "_")
+  james_naismith_diff[[new_column_name]] = james_naismith[[i]] - james_naismith[[i + 34]]
+}
+
+james_naismith_diff
+
+
+```
+Here, we select only the differential variables
+
+```{r}
+james_naismith_diff2 <- james_naismith_diff %>%
+  select(1:4,22,74:107)
+james_naismith_diff2
+```
+
+We removed some variables for purposes later on.
+```{r}
+james_naismith_diff2 <- james_naismith_diff2 %>%
+  select(-c(diff_WAB, SEED))
+```
+
+# XG Boost
+In the code below, we split the dataset into a training (70%) and test set (30%)
+
+```{r}
+
+set.seed(11111)
+sample <- sample.split(james_naismith_diff2$team_winner, SplitRatio = 0.7)
+march_train <- subset(james_naismith_diff2, sample == TRUE)
+march_test  <- subset(james_naismith_diff2, sample == FALSE)
+
+
+
+
+```
+
+```{r}
+dtrain <- xgb.DMatrix(data = as.matrix(march_train[,-c(1:4)]), label = as.numeric(march_train$team_winner))
+
+# Create test matrix
+
+
+
+dtest <-  xgb.DMatrix(data = as.matrix(march_test[,-c(1:4)]), label = as.numeric(march_test$team_winner))
+```
+
+```{r}
+set.seed(111111)
+bst_1 <- xgboost(data = dtrain, # Set training data
+               
+               nrounds = 100, # Set number of rounds
+               objective = "binary:logistic",
+               eval_metric = "error", 
+               eval_metric = "auc",
+               verbose = 1, # 1 - Prints out fit
+                print_every_n = 20) # Prints out result every 20th iteration
+```
+
+```{r}
+set.seed(111111)
+bst <- xgb.cv(data = dtrain, # Set training data
+              
+              nfold = 5, # Use 5 fold cross-validation
+               
+               eta = 0.1, # Set learning rate
+              
+               nrounds = 1000, # Set number of rounds
+               early_stopping_rounds = 50,
+               objective = "binary:logistic",
+               eval_metric = "error", 
+               eval_metric = "auc",# Set number of rounds to stop at if there is no improvement
+               
+               verbose = 1, # 1 - Prints out fit
+               nthread = 1, # Set number of parallel threads
+               print_every_n = 20) # Prints out result every 20th iteration
+```
+
+From this we see 77 was the optimal number of iterations for our model. We use this number solely to ensure that we are doing a sufficient amount of rounds for our next tuning stages. We will set the number of iterations to 100 and include an early stop parameter of 20 for our next round of tuning.
+
+```{r}
+max_depth_vals <- c(3, 5, 7, 10, 15) # Create vector of max depth values
+min_child_weight <- c(1,3,5,7, 10, 15) # Create vector of min child values
+
+# Expand grid of parameter values
+cv_params <- expand.grid(max_depth_vals, min_child_weight)
+names(cv_params) <- c("max_depth", "min_child_weight")
+# Create results vector
+rmse_vec  <- rep(NA, nrow(cv_params)) 
+# Loop through results
+for(i in 1:nrow(cv_params)){
+  set.seed(111111)
+  bst_tune <- xgb.cv(data = dtrain, # Set training data
+                     
+                     nfold = 5, # Use 5 fold cross-validation
+                     
+                     eta = 0.1, # Set learning rate
+                     max.depth = cv_params$max_depth[i], # Set max depth
+                     min_child_weight = cv_params$min_child_weight[i], # Set minimum number of samples in node to split
+                     
+                     
+                     nrounds = 1000, # Set number of rounds
+                     early_stopping_rounds = 50,
+                     objective = "binary:logistic",
+                     eval_metric = "error", 
+                     eval_metric = "auc",# Set number of rounds to stop at if there is no improvement
+                     
+                     verbose = 1, # 1 - Prints out fit
+                     nthread = 1, # Set number of parallel threads
+                     print_every_n = 20 # Prints out result every 20th iteration
+                     
+  ) # Set evaluation metric to use
+  
+  rmse_vec[i] <- bst_tune$evaluation_log$test_auc_mean[bst_tune$best_ntreelimit]
+  
+  
+}
+```
+Best is 49:
+
+```{r}
+# Join results in dataset
+res_db <- cbind.data.frame(cv_params, rmse_vec)
+names(res_db)[3] <- c("auc") 
+res_db$max_depth <- as.factor(res_db$max_depth) # Convert tree number to factor for plotting
+res_db$min_child_weight <- as.factor(res_db$min_child_weight) # Convert node size to factor for plotting
+# Print AUC heatmap
+g_2 <- ggplot(res_db, aes(y = max_depth, x = min_child_weight, fill = auc)) + # set aesthetics
+  geom_tile() + # Use geom_tile for heatmap
+  theme_bw() + # Set theme
+  scale_fill_gradient2(low = "blue", # Choose low color
+                       mid = "white", # Choose mid color
+                       high = "red", # Choose high color
+                       midpoint =mean(res_db$auc), # Choose mid point
+                       space = "Lab", 
+                       na.value ="grey", # Choose NA value
+                       guide = "colourbar", # Set color bar
+                       aesthetics = "fill") + # Select aesthetics to apply
+  labs(x = "Minimum Child Weight", y = "Max Depth", fill = "AUC") # Set labels
+g_2 # Generate plot
+```
+
+```{r}
+res_db[which.max(res_db$auc),] 
+```
+
+```{r}
+gamma_vals <- c(0, 0.05, 0.1, 0.15, 0.2) # Create vector of gamma values
+
+# Be Careful - This can take a very long time to run
+set.seed(111111)
+rmse_vec  <- rep(NA, length(gamma_vals))
+for(i in 1:length(gamma_vals)){
+  bst_tune <- xgb.cv(data = dtrain, # Set training data
+                     
+                     nfold = 5, # Use 5 fold cross-validation
+                     
+                     eta = 0.1, # Set learning rate
+                     max.depth = 3, # Set max depth
+                     min_child_weight = 15, # Set minimum number of samples in node to split
+                     gamma = gamma_vals[i], # Set minimum loss reduction for split
+                     
+                     
+                     
+                     nrounds = 1000, # Set number of rounds
+                     early_stopping_rounds = 50,
+                     objective = "binary:logistic",
+                     eval_metric = "error", 
+                     eval_metric = "auc",# Set number of rounds to stop at if there is no improvement
+                     
+                     verbose = 1, # 1 - Prints out fit
+                     nthread = 1, # Set number of parallel threads
+                     print_every_n = 20 # Prints out result every 20th iteration
+  ) # Set evaluation metric to use
+  
+  
+  rmse_vec[i] <- bst_tune$evaluation_log$test_auc_mean[bst_tune$best_ntreelimit]
+}
+```
+best 164
+
+
+```{r}
+cbind.data.frame(gamma_vals, rmse_vec)
+```
+
+```{r}
+###### 3 - Subsample and Column sample Tuning ######
+
+# Be Careful - This can take a very long time to run
+subsample <- c(0.6, 0.7, 0.8, 0.9, 1) # Create vector of subsample values
+colsample_by_tree <- c(0.6, 0.7, 0.8, 0.9, 1) # Create vector of col sample values
+
+# Expand grid of tuning parameters
+cv_params <- expand.grid(subsample, colsample_by_tree)
+names(cv_params) <- c("subsample", "colsample_by_tree")
+# Create vectors to store results
+rmse_vec <- rep(NA, nrow(cv_params)) 
+# Loop through parameter values
+for(i in 1:nrow(cv_params)){
+  set.seed(111111)
+  bst_tune <- xgb.cv(data = dtrain, # Set training data
+                     
+                     nfold = 5, # Use 5 fold cross-validation
+                     
+                     eta = 0.1, # Set learning rate
+                     max.depth = 3, # Set max depth
+                     min_child_weight = 15, # Set minimum number of samples in node to split
+                     gamma = 0.2, # Set minimum loss reduction for split
+                     subsample = cv_params$subsample[i], # Set proportion of training data to use in tree
+                     colsample_bytree = cv_params$colsample_by_tree[i], # Set number of variables to use in each tree
+                     
+                     nrounds = 1000, # Set number of rounds
+                     early_stopping_rounds = 50,
+                     objective = "binary:logistic",
+                     eval_metric = "error", 
+                     eval_metric = "auc",# Set number of rounds to stop at if there is no improvement
+                     
+                     verbose = 1, # 1 - Prints out fit
+                     nthread = 1, # Set number of parallel threads
+                     print_every_n = 20 # Prints out result every 20th iteration
+  ) # Set evaluation metric to use
+  
+  
+  rmse_vec[i] <- bst_tune$evaluation_log$test_auc_mean[bst_tune$best_ntreelimit]
+  
+  
+}
+```
+
+165
+
+```{r}
+res_db <- cbind.data.frame(cv_params, rmse_vec)
+names(res_db)[3] <- c("auc") 
+res_db$subsample <- as.factor(res_db$subsample) # Convert tree number to factor for plotting
+res_db$colsample_by_tree <- as.factor(res_db$colsample_by_tree) # Convert node size to factor for plotting
+g_4 <- ggplot(res_db, aes(y = colsample_by_tree, x = subsample, fill = auc)) + # set aesthetics
+  geom_tile() + # Use geom_tile for heatmap
+  theme_bw() + # Set theme
+  scale_fill_gradient2(low = "blue", # Choose low color
+                       mid = "white", # Choose mid color
+                       high = "red", # Choose high color
+                       midpoint =mean(res_db$auc), # Choose mid point
+                       space = "Lab", 
+                       na.value ="grey", # Choose NA value
+                       guide = "colourbar", # Set color bar
+                       aesthetics = "fill") + # Select aesthetics to apply
+  labs(x = "Subsample", y = "Column Sample by Tree", fill = "auc") # Set labels
+g_4 # Generate plot
+```
+
+
+```{r}
+res_db
+```
+
+
+```{r}
+res_db[which.max(res_db$auc),]
+```
+
+```{r}
+# Use xgb.cv to run cross-validation inside xgboost
+set.seed(111111)
+bst_mod_1 <- xgb.cv(data = dtrain, # Set training data
+                    
+                    nfold = 5, # Use 5 fold cross-validation
+                    
+                    eta = 0.3, # Set learning rate
+                    max.depth = 3, # Set max depth
+                    min_child_weight = 15, # Set minimum number of samples in node to split
+                    gamma = .2, # Set minimum loss reduction for split
+                    subsample = .6, # Set proportion of training data to use in tree
+                    colsample_bytree =  .8, # Set number of variables to use in each tree
+                    
+                    nrounds = 1000, # Set number of rounds
+                    early_stopping_rounds = 50, 
+                    objective = "binary:logistic",
+                    eval_metric = "error", 
+                    eval_metric = "auc",# Set number of rounds to stop at if there is no improvement
+                    
+                    verbose = 1, # 1 - Prints out fit
+                    nthread = 1, # Set number of parallel threads
+                    print_every_n = 20 # Prints out result every 20th i
+)
+```
+
+
+```{r}
+set.seed(111111)
+bst_mod_2 <- xgb.cv(data = dtrain, # Set training data
+                    
+                    nfold = 5, # Use 5 fold cross-validation
+                    
+                    eta = 0.1, # Set learning rate
+                    max.depth =  3, # Set max depth
+                    min_child_weight = 15, # Set minimum number of samples in node to split
+                    gamma = .2, # Set minimum loss reduction for split
+                    subsample = .6, # Set proportion of training data to use in tree
+                    colsample_bytree = .8, # Set number of variables to use in each tree
+                    
+                    nrounds = 1000, # Set number of rounds
+                    early_stopping_rounds = 50,
+                    objective = "binary:logistic",
+                    eval_metric = "error", 
+                    eval_metric = "auc",# Set number of rounds to stop at if there is no improvement
+                    
+                    verbose = 1, # 1 - Prints out fit
+                    nthread = 1, # Set number of parallel threads
+                    print_every_n = 20 # Prints out result every 20th iteration
+) # Set evaluation metric to use
+```
+
+
+```{r}
+set.seed(111111)
+bst_mod_3 <- xgb.cv(data = dtrain, # Set training data
+                    
+                    nfold = 5, # Use 5 fold cross-validation
+                    
+                    eta = 0.05, # Set learning rate
+                    max.depth = 3, # Set max depth
+                    min_child_weight = 15, # Set minimum number of samples in node to split
+                    gamma = .2, # Set minimum loss reduction for split
+                    subsample = .6 , # Set proportion of training data to use in tree
+                    colsample_bytree =  .8, # Set number of variables to use in each tree
+                    
+                    nrounds = 1000, # Set number of rounds
+                    early_stopping_rounds = 50,
+                    objective = "binary:logistic",
+                    eval_metric = "error", 
+                    eval_metric = "auc",# Set number of rounds to stop at if there is no improvement
+                    
+                    verbose = 1, # 1 - Prints out fit
+                    nthread = 1, # Set number of parallel threads
+                    print_every_n = 20 # Prints out result every 20th iteration
+) # Set evaluation metric to use
+```
+
+
+
+```{r}
+set.seed(111111)
+bst_mod_4 <- xgb.cv(data = dtrain, # Set training data
+                    
+                    nfold = 5, # Use 5 fold cross-validation
+                    
+                    eta = 0.01, # Set learning rate
+                    max.depth = 3, # Set max depth
+                    min_child_weight = 15, # Set minimum number of samples in node to split
+                    gamma = 0.2, # Set minimum loss reduction for split
+                    subsample = .6, # Set proportion of training data to use in tree
+                    colsample_bytree = .8, # Set number of variables to use in each tree
+                    
+                    nrounds = 1000, # Set number of rounds
+                    early_stopping_rounds = 50,
+                    objective = "binary:logistic",
+                    eval_metric = "error", 
+                    eval_metric = "auc",# Set number of rounds to stop at if there is no improvement
+                    
+                    verbose = 1, # 1 - Prints out fit
+                    nthread = 1, # Set number of parallel threads
+                    print_every_n = 20 # Prints out result every 20th iteration
+) # Set evaluation metric to use
+```
+
+
+
+```{r}
+set.seed(111111)
+bst_mod_5 <- xgb.cv(data = dtrain, # Set training data
+                    
+                    nfold = 5, # Use 5 fold cross-validation
+                    
+                    eta = 0.005, # Set learning rate
+                    max.depth = 3, # Set max depth
+                    min_child_weight = 15, # Set minimum number of samples in node to split
+                    gamma = .2, # Set minimum loss reduction for split
+                    subsample = .6 , # Set proportion of training data to use in tree
+                    colsample_bytree = .8, # Set number of variables to use in each tree
+                    
+                    nrounds = 1000, # Set number of rounds
+                    early_stopping_rounds = 50,
+                    objective = "binary:logistic",
+                    eval_metric = "error", 
+                    eval_metric = "auc",# Set number of rounds to stop at if there is no improvement
+                    
+                    verbose = 1, # 1 - Prints out fit
+                    nthread = 1, # Set number of parallel threads
+                    print_every_n = 20 # Prints out result every 20th iteration
+                    
+) # Set evaluation metric to use
+```
+
+```{r}
+# Extract results for model with eta = 0.3
+pd1 <- cbind.data.frame(bst_mod_1$evaluation_log[,c("iter", "test_error_mean")], rep(0.3, nrow(bst_mod_1$evaluation_log)))
+names(pd1)[3] <- "eta"
+# Extract results for model with eta = 0.1
+pd2 <- cbind.data.frame(bst_mod_2$evaluation_log[,c("iter", "test_error_mean")], rep(0.1, nrow(bst_mod_2$evaluation_log)))
+names(pd2)[3] <- "eta"
+# Extract results for model with eta = 0.05
+pd3 <- cbind.data.frame(bst_mod_3$evaluation_log[,c("iter", "test_error_mean")], rep(0.05, nrow(bst_mod_3$evaluation_log)))
+names(pd3)[3] <- "eta"
+# Extract results for model with eta = 0.01
+pd4 <- cbind.data.frame(bst_mod_4$evaluation_log[,c("iter", "test_error_mean")], rep(0.01, nrow(bst_mod_4$evaluation_log)))
+names(pd4)[3] <- "eta"
+# Extract results for model with eta = 0.005
+pd5 <- cbind.data.frame(bst_mod_5$evaluation_log[,c("iter", "test_error_mean")], rep(0.005, nrow(bst_mod_5$evaluation_log)))
+names(pd5)[3] <- "eta"
+# Join datasets
+plot_data <- rbind.data.frame(pd1, pd2, pd3, pd4, pd5)
+# Converty ETA to factor
+plot_data$eta <- as.factor(plot_data$eta)
+# Plot points
+g_6 <- ggplot(plot_data, aes(x = iter, y = test_error_mean, color = eta))+
+  geom_point(alpha = 0.5) +
+  theme_bw() + # Set theme
+  theme(panel.grid.major = element_blank(), # Remove grid
+        panel.grid.minor = element_blank(), # Remove grid
+        panel.border = element_blank(), # Remove grid
+        panel.background = element_blank()) + # Remove grid 
+  labs(x = "Number of Trees", title = "Error rate v Number of Trees",
+       y = "Error Rate", color = "Learning \n Rate")  # Set labels
+g_6
+```
+
+
+```{r}
+set.seed(111111)
+bst_final <- xgboost(data = dtrain, # Set training data
+                     
+                     
+                     
+                     eta = .05, # Set learning rate
+                     max.depth =  3, # Set max depth
+                     min_child_weight = 15, # Set minimum number of samples in node to split
+                     gamma = .2, # Set minimum loss reduction for split
+                     subsample = .6, # Set proportion of training data to use in tree
+                     colsample_bytree = .8, # Set number of variables to use in each tree
+                     
+                     nrounds = 1000, # Set number of rounds
+                     early_stopping_rounds = 50,
+                     objective = "binary:logistic",
+                     eval_metric = "error", 
+                     eval_metric = "auc",# Set number of rounds to stop at if there is no improvement
+                     
+                     verbose = 1, # 1 - Prints out fit
+                     nthread = 1, # Set number of parallel threads
+                     print_every_n = 20 # Prints out result every 20th iteration
+                     
+) # Set evaluation metric to use
+```
+
+These are the most important differential metrics for winning games and losing games in March Madness.
+
+```{r}
+# Extract importance
+imp_mat <- xgb.importance(model = bst_final)
+# Plot importance (top 10 variables)
+xgb.plot.importance(imp_mat, top_n = 25)
+```
+
+In the code below, we clean the dataset to only include the 2024 March Madness tournament teams(64)
+
+```{r}
+mm24 <- metrics %>%
+  filter(YEAR == 2024)
+
+addrow <- metrics2[631,]
+
+mm24 <- rbind(mm24, addrow)
+
+mm24 <- mm24[-6,]
+```
+
+Here is where we create the march madness tournament bracket structure for each region.
+
+```{r}
+Tourney24 <-  data.frame(teams = c(#East:
+  "UConn", # 1
+  "Stetson", # 16
+  "Iowa State", # 2
+  "South Dakota State", # 15
+  "Illinois", # 3 
+  "Morehead State", # 14
+  "Auburn", # 4
+  "Yale", # 13
+  "San Diego State", # 5
+  "UAB", # 12
+  "BYU", # 6
+  "Duquesne", # 11
+  "Washington State", # 7 
+  "Drake", # 10
+  "Florida Atlantic", # 8 
+  "Northwestern", # 9  
+  
+  #West:
+  "North Carolina", # 1
+  "Wagner", # 16 
+  "Arizona", # 2
+  "Long Beach State", # 15
+  "Baylor", # 3
+  "Colgate", # 14
+  "Alabama", # 4
+  "Charleston", # 13
+  "Saint Mary's", # 5
+  "Grand Canyon", # 12
+  "Clemson", # 6
+  "New Mexico", # 11 
+  "Dayton", # 7
+  "Nevada", # 10
+  "Mississippi State", # 8
+  "Michigan State", # 9
+  
+  #South:
+  "Houston", # 1
+  "Longwood", # 16
+  "Marquette", # 2
+  "Western Kentucky", # 15
+  "Kentucky", # 3
+  "Oakland", # 14
+  "Duke", # 4
+  "Vermont", # 13
+  "Wisconsin", # 5
+  "James Madison", # 12
+  "Texas Tech", # 6
+  "NC State", # 11
+  "Florida", # 7
+  "Colorado", # 10, or Boise State
+  "Nebraska", # 8
+  "Texas A&M", # 9
+  
+  #Midwest:
+  "Purdue", # 1
+  "Grambling", # 16
+  "Tennessee", # 2
+  "Saint Peter's", # 15
+  "Creighton", # 3
+  "Akron", # 14
+  "Kansas", # 4
+  "Samford", # 13
+  "Gonzaga", # 5
+  "McNeese", # 12
+  "South Carolina", # 6
+  "Oregon", # 11
+  "Texas", # 7
+  "Colorado State", # 10
+  "Utah State", # 8
+  "TCU" # 9
+  ), 
+  
+                       seed_s = c("W01", "W16", "W02", "W15", "W03", "W14", "W04", "W13",
+                                  "W05", "W12", "W06", "W11", "W07", "W10", "W08", "W09",
+                                  "X01", "X16", "X02", "X15", "X03", "X14", "X04", "X13",
+                                  "X05", "X12", "X06", "X11", "X07", "X10", "X08", "X09",
+                                  "Y01", "Y16", "Y02", "Y15", "Y03", "Y14", "Y04", "Y13", 
+                                  "Y05", "Y12", "Y06", "Y11", "Y07", "Y10", "Y08", "Y09",
+                                  "Z01", "Z16", "Z02", "Z15", "Z03", "Z14", "Z04", "Z13",
+                                  "Z05", "Z12", "Z06", "Z11", "Z07", "Z10", "Z08", "Z09"
+                                  ), 
+                       
+                       
+                       # Work from outsides of range building into the median to create WO1 vs. WO16 and so on reference the march madness bracket. 
+                       
+                       Game1 = c( 1,1,   2,2,   3,3,   4,4,   5,5,   6,6,   7,7,   8,8,
+                                  9,9,  10,10, 11,11, 12,12, 13,13, 14,14, 15,15, 16,16,
+                                 17,17, 18,18, 19,19, 20,20, 21,21, 22,22, 23,23, 24,24,
+                                 25,25, 26,26, 27,27, 28,28, 29,29, 30,30, 31,31, 32,32
+                                 ),
+                       
+                       Game2 = c(        1,1, 2,2, 3,3, 4,4, 4,4, 3,3, 2,2, 1,1,
+                                         5,5, 6,6, 7,7, 8,8, 8,8, 7,7, 6,6, 5,5,
+                                   9,9, 10,10, 11,11, 12,12, 12,12, 11,11, 10,10, 9,9,
+                                 13,13, 14,14, 15,15, 16,16, 16,16, 15,15, 14,14, 13,13
+                                 ), # Up to 16
+  
+                       Game3 = c(1,1, 2,2, 2,2, 1,1, 1,1, 2,2, 2,2, 1,1,
+                                 3,3, 4,4, 4,4, 3,3, 3,3, 4,4, 4,4, 3,3,
+                                 5,5, 6,6, 6,6, 5,5, 5,5, 6,6, 6,6, 5,5,
+                                 7,7, 8,8, 8,8, 7,7, 7,7, 8,8, 8,8, 7,7
+                                 ), # Start with 8 1s up until 8
+  
+                       Game4 = c(rep(1,16), rep(2,16), rep(3,16), rep(4,16)), # 16 1s up until 4
+                       
+### This needs reviewed, but I am making the assumption the bracket quadrants are labeled clock wise
+### i.e. W = South, X = East, Y = West, Z = Midwest. This Means in Final 4 you have W vs. Z and X vs. Y.
+  
+                       Game5 = c(rep(1,16),rep(1,16),rep(2,16),rep(2,16)), # final 4 two games 4 numbers
+  
+                       Game6 = c(rep(1,64)) # championship 1 game 2 numbers 
+)
+
+#Apply Elo rating simulation
+elo_vals <- rep(NA, 64)
+
+# Add elo
+for(i in 1:64){
+  elo_vals[i] <- mm24[mm24$TEAM == Tourney24$teams[i],]$elo
+  #print(i)
+}
+
+Tourney24$elo <- elo_vals
+```
+
+Our prepare_features function takes the matchups and extracts the team metrics for each team and calculates the differential variables from our bst_final model to calculate a winning probability.
+```{r}
+prepare_features <- function(team1, team2, mm24) {
+    team1_data <- mm24[which(mm24$TEAM == team1), ]
+    team2_data <- mm24[which(mm24$TEAM == team2), ]
+
+    
+    #diff_vec <- cbind.data.frame(team1_data, team2_data)#different way with columns names
+    data.frame(
+        diff_ADJOE = team1_data$ADJOE - team2_data$ADJOE,
+        diff_ADJDE = team1_data$ADJDE - team2_data$ADJDE,
+        diff_BARTHAG = team1_data$BARTHAG - team2_data$BARTHAG,
+        diff_EFG_O = team1_data$EFG_O - team2_data$EFG_O,
+        diff_EFG_D = team1_data$EFG_D - team2_data$EFG_D,
+        diff_TOR = team1_data$TOR - team2_data$TOR,
+        diff_TORD = team1_data$TORD - team2_data$TORD,
+        diff_ORB = team1_data$ORB - team2_data$ORB,
+        diff_DRB = team1_data$DRB - team2_data$DRB,
+        diff_FTR = team1_data$FTR - team2_data$FTR,
+        diff_FTRD = team1_data$FTRD - team2_data$FTRD,
+        diff_X2P_O = team1_data$X2P_O - team2_data$X2P_O,
+        diff_X2P_D = team1_data$X2P_D - team2_data$X2P_D,
+        diff_X3P_O = team1_data$X3P_O - team2_data$X3P_O,
+        diff_X3P_D = team1_data$X3P_D - team2_data$X3P_D,
+        diff_ADJ_T = team1_data$ADJ_T - team2_data$ADJ_T,
+        diff_dbpr_Player.1 = team1_data$dbpr_Player.1 - team2_data$dbpr_Player.1,
+        diff_dbpr_Player.2 = team1_data$dbpr_Player.2 - team2_data$dbpr_Player.2,
+        diff_dbpr_Player.3 = team1_data$dbpr_Player.3 - team2_data$dbpr_Player.3,
+        diff_dbpr_Player.4 = team1_data$dbpr_Player.4 - team2_data$dbpr_Player.4,
+        diff_dbpr_Player.5 = team1_data$dbpr_Player.5 - team2_data$dbpr_Player.5,
+        diff_dbpr_Player.6 = team1_data$dbpr_Player.6 - team2_data$dbpr_Player.6,
+        diff_dbpr_Player.7 = team1_data$dbpr_Player.7 - team2_data$dbpr_Player.7,
+        diff_dbpr_Player.8 = team1_data$dbpr_Player.8 - team2_data$dbpr_Player.8,
+        diff_obpr_Player.1 = team1_data$obpr_Player.1 - team2_data$obpr_Player.1,
+        diff_obpr_Player.2 = team1_data$obpr_Player.2 - team2_data$obpr_Player.2,
+        diff_obpr_Player.3 = team1_data$obpr_Player.3 - team2_data$obpr_Player.3,
+        diff_obpr_Player.4 = team1_data$obpr_Player.4 - team2_data$obpr_Player.4,
+        diff_obpr_Player.5 = team1_data$obpr_Player.5 - team2_data$obpr_Player.5,
+        diff_obpr_Player.6 = team1_data$obpr_Player.6 - team2_data$obpr_Player.6,
+        diff_obpr_Player.7 = team1_data$obpr_Player.7 - team2_data$obpr_Player.7,
+        diff_obpr_Player.8 = team1_data$obpr_Player.8 - team2_data$obpr_Player.8,
+        diff_elo = team1_data$elo - team2_data$elo
+        # Add other features as needed
+    )
+}
+
+
+
+
+march_madness_sim2 <- function(team_db = Tourney24, bst_final, mm24) {
+    Tourney <- team_db
+    round2 <- rep(NA, nrow(Tourney))
+
+    for (i in 1:32) {
+        teams <- Tourney$teams[which(Tourney$Game1 == i)]
+
+        # Prepare the features for the XGBoost model
+        features <- prepare_features(teams[1], teams[2], mm24)
+        
+        # convert to xbg.dmatrix
+        dtest <-  xgb.DMatrix(data = as.matrix(features))
+
+        
+        # Get the prediction from the XGBoost model
+        pred <- predict(bst_final, dtest, type = "prob")
+
+        sim <- runif(1)
+        if (pred < sim) {
+            round2[which(Tourney$teams == teams[2])] <- Tourney$Game2[which(Tourney$teams == teams[2])]
+        } else {
+            round2[which(Tourney$teams == teams[1])] <- Tourney$Game2[which(Tourney$teams == teams[1])]
+        }
+    }
+
+    Tourney$round2 <- round2
+    
+    round3 <- rep(NA, nrow(Tourney))
+
+    for (i in 1:16) {
+        teams <- Tourney$teams[which(Tourney$round2 == i)]
+  
+    # Check if there are two teams to compare, to avoid errors
+       if (length(teams) == 2) {
+        # Prepare the features for the XGBoost model
+         
+         
+         # Prepare the features for the XGBoost model
+        features <- prepare_features(teams[1], teams[2], mm24)
+        
+        # convert to xbg.dmatrix
+        dtest <-  xgb.DMatrix(data = as.matrix(features))
+
+        
+        # Get the prediction from the XGBoost model
+        pred <- predict(bst_final, dtest, type = "prob")
+  
+         sim <- runif(1)
+        if (pred < sim) {
+            round3[which(Tourney$teams == teams[2])] <- Tourney$Game3[which(Tourney$teams == teams[2])]
+        } else {
+            round3[which(Tourney$teams == teams[1])] <- Tourney$Game3[which(Tourney$teams == teams[1])]
+        }
+      }
+   }
+
+   Tourney$round3 <- round3
+   
+   
+    round4 <- rep(NA, nrow(Tourney))
+
+    for (i in 1:8) {
+    teams <- Tourney$teams[which(Tourney$round3 == i)]
+
+    # Ensure we have two teams for the comparison
+        if (length(teams) == 2) {
+        # Prepare the features for the XGBoost model
+
+        features <- prepare_features(teams[1], teams[2], mm24)
+        
+        # convert to xbg.dmatrix
+        dtest <-  xgb.DMatrix(data = as.matrix(features))
+
+        
+        # Get the prediction from the XGBoost model
+        pred <- predict(bst_final, dtest, type = "prob")
+  
+        sim <- runif(1)
+        if (pred < sim) {
+            round4[which(Tourney$teams == teams[2])] <- Tourney$Game4[which(Tourney$teams == teams[2])]
+        } else {
+            round4[which(Tourney$teams == teams[1])] <- Tourney$Game4[which(Tourney$teams == teams[1])]
+        }
+       }
+    }
+
+    Tourney$round4 <- round4
+    
+    round5 <- rep(NA, nrow(Tourney))
+
+    for (i in 1:4) {
+        teams <- Tourney$teams[which(Tourney$round4 == i)]
+
+        if (length(teams) == 2) {
+        # Prepare the features for the XGBoost model
+        features <- prepare_features(teams[1], teams[2], mm24)
+        
+        # convert to xbg.dmatrix
+        dtest <-  xgb.DMatrix(data = as.matrix(features))
+
+        
+        # Get the prediction from the XGBoost model
+        pred <- predict(bst_final, dtest, type = "prob")
+
+        sim <- runif(1)
+        if (pred < sim) {
+            round5[which(Tourney$teams == teams[2])] <- Tourney$Game5[which(Tourney$teams == teams[2])]
+        } else {
+            round5[which(Tourney$teams == teams[1])] <- Tourney$Game5[which(Tourney$teams == teams[1])]
+        }
+      }
+    }
+
+    Tourney$round5 <- round5
+    
+    round6 <- rep(NA, nrow(Tourney))
+
+    for (i in 1:2) {
+      teams <- Tourney$teams[which(Tourney$round5 == i)]
+
+        if (length(teams) == 2) {
+        # Prepare the features for the XGBoost model
+# Prepare the features for the XGBoost model
+        features <- prepare_features(teams[1], teams[2], mm24)
+        
+        # convert to xbg.dmatrix
+        dtest <-  xgb.DMatrix(data = as.matrix(features))
+
+        
+        # Get the prediction from the XGBoost model
+        pred <- predict(bst_final, dtest, type = "prob")
+
+        sim <- runif(1)
+        if (pred < sim) {
+            round6[which(Tourney$teams == teams[2])] <- Tourney$Game6[which(Tourney$teams == teams[2])]
+        } else {
+            round6[which(Tourney$teams == teams[1])] <- Tourney$Game6[which(Tourney$teams == teams[1])]
+        }
+      }
+    }
+
+    Tourney$round6 <- round6
+
+    Champ <- rep(NA, nrow(Tourney))
+
+    teams <- Tourney$teams[which(Tourney$round6 == 1)]
+
+if (length(teams) == 2) {
+    # Prepare the features for the XGBoost model
+        features <- prepare_features(teams[1], teams[2], mm24)
+        
+        # convert to xbg.dmatrix
+        dtest <-  xgb.DMatrix(data = as.matrix(features))
+
+        
+        # Get the prediction from the XGBoost model
+        pred <- predict(bst_final, dtest, type = "prob")
+
+    sim <- runif(1)
+    if (pred < sim) {
+        Champ[which(Tourney$teams == teams[2])] <- Tourney$Game6[which(Tourney$teams == teams[2])]
+    } else {
+        Champ[which(Tourney$teams == teams[1])] <- Tourney$Game6[which(Tourney$teams == teams[1])]
+      }
+    }
+
+    Tourney$Champ <- Champ
+
+
+
+
+
+
+    # Repeat similar logic for round3 to round6...
+    # Ensure you update the game numbers and rounds appropriately
+
+  return(Tourney)
+}
+
+
+```
+
+
+```{r}
+# Ensure bst_final model is loaded and available
+
+# Create a vector to store tournament winner
+winner <- rep(NA, 10000)
+
+# Initialize counters for each round's progression
+round2 <- round3 <- round4 <- round5 <- round6 <- Champ <- rep(0, nrow(Tourney24))
+
+# Data frame to store the results
+bracket_res <- data.frame(Tourney24$teams, Tourney24$seed_s)
+
+
+# Simulate the tournament 10,000 times
+for(x in 1:10000) {
+    set.seed(x + 5882300)  # for reproducibility
+    temp <- march_madness_sim2(team_db = Tourney24, bst_final, mm24)
+
+    # Accumulate the number of times each team progresses in each round
+    round2 <- round2 + !is.na(temp$round2)
+    round3 <- round3 + !is.na(temp$round3)
+    round4 <- round4 + !is.na(temp$round4)
+    round5 <- round5 + !is.na(temp$round5)
+    round6 <- round6 + !is.na(temp$round6)
+    Champ <- Champ + !is.na(temp$Champ)
+  
+    # Determine the tournament winner for each simulation
+    winner[x] <- temp$teams[which(temp$Champ == 1)]
+}
+
+# Store overall bracket results
+bracket_res$round32 <- round2
+bracket_res$sweet16 <- round3
+bracket_res$elite8 <- round4
+bracket_res$final4 <- round5
+bracket_res$championship <- round6
+bracket_res$winner <- Champ
+
+names(bracket_res)[c(1,2)] <- c("teams", "seed")
+
+```
+
+Bracket_res has the results for the 10000 times simulations.
+
+```{r}
+write.csv(bracket_res, 
+          "sim2024.csv", row.names = FALSE)
+```
+
