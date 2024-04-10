@@ -44,7 +44,9 @@ library(xgboostExplainer)
 
 # the dataset "cbb_season_results" contains all of the regular season games for the March Madness tournament teams from 2013 to 2024
 
-cbb_season_results <- read.csv("historic_regular_season.csv")
+#cbb_season_results <- read.csv("historic_regular_season.csv")
+load("total_cbb_season_results.rda")
+cbb_season_results <- cbb_season_results_h_a
 
 # the dataset "metrics" contains all of the team statistical and player metrics for the March Madness tournament teams from 2013 to 2024
 
