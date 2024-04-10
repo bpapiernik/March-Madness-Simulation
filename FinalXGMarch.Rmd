@@ -66,7 +66,7 @@ cbb_season_results$game_date_time <- as.Date(cbb_season_results$game_date_time)
 
 In the chunk below, we merge the rows for the cbb_season_results and mm dataset so that all the regular season and postseason games are included in one singular dataset
 ```{r}
-total_games1 <- rbind(cbb_season_results, mm)
+total_games1 <- rbind(cbb_season_results[,-55], mm) # removing in season post-game ELO for now, until we get each MM game ELO result
 ```
 
 
