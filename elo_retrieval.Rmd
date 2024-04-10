@@ -37,19 +37,17 @@ temp <- temp %>%
   mutate(game_date = as.Date(game_date)) %>%
   filter(game_date <= "2024-03-17")
 
-away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
-home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+away_rows <- temp[which(temp$team_home_away == "away"), c(1,2,4,
+                                                          6,9:11,18)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1,2,4,
+                                                          6,9:11,18)]
 
-names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
-                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
-                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
-names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
-                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
-                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+names(away_rows)[c(4:8)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score")
+names(home_rows)[c(4:8)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score")
 
 cbb_season_results <- cbind(home_rows, away_rows)
 
-cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+cbb_season_results <- cbb_season_results[,-c(9,10,11)]
 
 cbb_season_results$result <- NA
 
@@ -66,6 +64,11 @@ We then need to assign an initial Elo rating for each team, we will give each te
 ```{r}
 # Join teams and initial elo rating
 teams_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+
+# Create ELO result column in dataframe
+cbb_season_results$home_elo_res <- rep(1500, nrow(cbb_season_results))
+cbb_season_results$away_elo_res <- rep(1500, nrow(cbb_season_results))
+
 # Name columns
 names(teams_elo) <- c("teams", "elo")
 # View first few rows of teams
@@ -74,6 +77,8 @@ head(teams_elo)
 
 We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
 ```{r}
+cbb_season_results <- arrange(cbb_season_results, game_date)
+
 # For each game in our dataset
 for(i in 1:nrow(cbb_season_results)){
   # Extract match
@@ -92,16 +97,20 @@ for(i in 1:nrow(cbb_season_results)){
   
   # Store new elo ratings for home team
   teams_elo$elo[teams_elo$team == game$home_team] <- new_elo[1,1]
+  cbb_season_results$home_elo_res[i] <- new_elo[1,1]
+  
   # Store new elo ratings for away team
   teams_elo$elo[teams_elo$team == game$away_team] <- new_elo[1,2]
+  cbb_season_results$away_elo_res[i] <- new_elo[1,2]
+
 }
 ```
 
 ```{r}
+cbb_season_results <- arrange(cbb_season_results, desc(game_date))
+
 teams_elo$season <- 2024
 head(teams_elo, 10)
-
-final_elo <- teams_elo
 ```
 
 Filter for only March Madness teams
@@ -204,19 +213,17 @@ temp <- temp %>%
   mutate(game_date = as.Date(game_date)) %>%
   filter(game_date <= "2023-03-12")
 
-away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
-home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+away_rows <- temp[which(temp$team_home_away == "away"), c(1,2,4,
+                                                          6,9:11,18)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1,2,4,
+                                                          6,9:11,18)]
 
-names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
-                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
-                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
-names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
-                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
-                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+names(away_rows)[c(4:8)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score")
+names(home_rows)[c(4:8)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score")
 
 cbb_season_results <- cbind(home_rows, away_rows)
 
-cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+cbb_season_results <- cbb_season_results[,-c(9,10,11)]
 
 cbb_season_results$result <- NA
 
@@ -234,6 +241,11 @@ We then need to assign an initial Elo rating for each team, we will give each te
 ```{r}
 # Join teams and initial elo rating
 temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+
+# Create ELO result column in dataframe
+cbb_season_results$home_elo_res <- rep(1500, nrow(cbb_season_results))
+cbb_season_results$away_elo_res <- rep(1500, nrow(cbb_season_results))
+
 # Name columns
 names(temp_elo) <- c("teams", "elo")
 # View first few rows of teams
@@ -243,6 +255,8 @@ head(temp_elo)
 We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
 
 ```{r}
+cbb_season_results <- arrange(cbb_season_results, game_date)
+
 # For each game in our dataset
 for(i in 1:nrow(cbb_season_results)){
   # Extract match
@@ -261,12 +275,17 @@ for(i in 1:nrow(cbb_season_results)){
   
   # Store new elo ratings for home team
   temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  cbb_season_results$home_elo_res[i] <- new_elo[1,1]
+
   # Store new elo ratings for away team
   temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+  cbb_season_results$away_elo_res[i] <- new_elo[1,2]
+
 }
 
+cbb_season_results <- arrange(cbb_season_results, desc(game_date))
+
 temp_elo$season <- 2023
-final_elo <- rbind(final_elo,temp_elo)
 ```
 
 Filter for only March Madness teams
@@ -371,19 +390,17 @@ temp <- temp %>%
   mutate(game_date = as.Date(game_date)) %>%
   filter(game_date <= "2022-03-13")
 
-away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
-home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+away_rows <- temp[which(temp$team_home_away == "away"), c(1,2,4,
+                                                          6,9:11,18)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1,2,4,
+                                                          6,9:11,18)]
 
-names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
-                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
-                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
-names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
-                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
-                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+names(away_rows)[c(4:8)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score")
+names(home_rows)[c(4:8)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score")
 
 cbb_season_results <- cbind(home_rows, away_rows)
 
-cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+cbb_season_results <- cbb_season_results[,-c(9,10,11)]
 
 cbb_season_results$result <- NA
 
@@ -401,6 +418,11 @@ We then need to assign an initial Elo rating for each team, we will give each te
 ```{r}
 # Join teams and initial elo rating
 temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+
+# Create ELO result column in dataframe
+cbb_season_results$home_elo_res <- rep(1500, nrow(cbb_season_results))
+cbb_season_results$away_elo_res <- rep(1500, nrow(cbb_season_results))
+
 # Name columns
 names(temp_elo) <- c("teams", "elo")
 # View first few rows of teams
@@ -410,6 +432,8 @@ head(temp_elo)
 We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
 
 ```{r}
+cbb_season_results <- arrange(cbb_season_results, game_date)
+
 # For each game in our dataset
 for(i in 1:nrow(cbb_season_results)){
   # Extract match
@@ -428,12 +452,17 @@ for(i in 1:nrow(cbb_season_results)){
   
   # Store new elo ratings for home team
   temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  cbb_season_results$home_elo_res[i] <- new_elo[1,1]
+
   # Store new elo ratings for away team
   temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+  cbb_season_results$away_elo_res[i] <- new_elo[1,2]
+
 }
 
+cbb_season_results <- arrange(cbb_season_results, desc(game_date))
+
 temp_elo$season <- 2022
-final_elo <- rbind(final_elo,temp_elo)
 ```
 
 Filter for only March Madness teams
@@ -538,19 +567,17 @@ temp <- temp %>%
   mutate(game_date = as.Date(game_date)) %>%
   filter(game_date <= "2021-03-14") # end of regular season
 
-away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
-home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+away_rows <- temp[which(temp$team_home_away == "away"), c(1,2,4,
+                                                          6,9:11,18)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1,2,4,
+                                                          6,9:11,18)]
 
-names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
-                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
-                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
-names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
-                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
-                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+names(away_rows)[c(4:8)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score")
+names(home_rows)[c(4:8)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score")
 
 cbb_season_results <- cbind(home_rows, away_rows)
 
-cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+cbb_season_results <- cbb_season_results[,-c(9,10,11)]
 
 cbb_season_results$result <- NA
 
@@ -568,6 +595,11 @@ We then need to assign an initial Elo rating for each team, we will give each te
 ```{r}
 # Join teams and initial elo rating
 temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+
+# Create ELO result column in dataframe
+cbb_season_results$home_elo_res <- rep(1500, nrow(cbb_season_results))
+cbb_season_results$away_elo_res <- rep(1500, nrow(cbb_season_results))
+
 # Name columns
 names(temp_elo) <- c("teams", "elo")
 # View first few rows of teams
@@ -577,6 +609,8 @@ head(temp_elo)
 We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
 
 ```{r}
+cbb_season_results <- arrange(cbb_season_results, game_date)
+
 # For each game in our dataset
 for(i in 1:nrow(cbb_season_results)){
   # Extract match
@@ -595,12 +629,17 @@ for(i in 1:nrow(cbb_season_results)){
   
   # Store new elo ratings for home team
   temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  cbb_season_results$home_elo_res[i] <- new_elo[1,1]
+
   # Store new elo ratings for away team
   temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+  cbb_season_results$away_elo_res[i] <- new_elo[1,2]
+
 }
 
-temp_elo$season <- 2021 # change for each year
-final_elo <- rbind(final_elo,temp_elo)
+cbb_season_results <- arrange(cbb_season_results, desc(game_date))
+
+temp_elo$season <- 2021
 ```
 
 Filter for only March Madness teams
@@ -707,19 +746,17 @@ temp <- temp %>%
   mutate(game_date = as.Date(game_date)) %>%
   filter(game_date <= "2019-03-17") # end of regular season
 
-away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
-home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+away_rows <- temp[which(temp$team_home_away == "away"), c(1,2,4,
+                                                          6,9:11,18)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1,2,4,
+                                                          6,9:11,18)]
 
-names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
-                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
-                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
-names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
-                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
-                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+names(away_rows)[c(4:8)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score")
+names(home_rows)[c(4:8)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score")
 
 cbb_season_results <- cbind(home_rows, away_rows)
 
-cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+cbb_season_results <- cbb_season_results[,-c(9,10,11)]
 
 cbb_season_results$result <- NA
 
@@ -737,6 +774,11 @@ We then need to assign an initial Elo rating for each team, we will give each te
 ```{r}
 # Join teams and initial elo rating
 temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+
+# Create ELO result column in dataframe
+cbb_season_results$home_elo_res <- rep(1500, nrow(cbb_season_results))
+cbb_season_results$away_elo_res <- rep(1500, nrow(cbb_season_results))
+
 # Name columns
 names(temp_elo) <- c("teams", "elo")
 # View first few rows of teams
@@ -746,6 +788,8 @@ head(temp_elo)
 We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
 
 ```{r}
+cbb_season_results <- arrange(cbb_season_results, game_date)
+
 # For each game in our dataset
 for(i in 1:nrow(cbb_season_results)){
   # Extract match
@@ -764,12 +808,17 @@ for(i in 1:nrow(cbb_season_results)){
   
   # Store new elo ratings for home team
   temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  cbb_season_results$home_elo_res[i] <- new_elo[1,1]
+
   # Store new elo ratings for away team
   temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+  cbb_season_results$away_elo_res[i] <- new_elo[1,2]
+
 }
 
-temp_elo$season <- 2019 # change for each year
-final_elo <- rbind(final_elo,temp_elo)
+cbb_season_results <- arrange(cbb_season_results, desc(game_date))
+
+temp_elo$season <- 2019
 ```
 
 Filter for only March Madness teams
@@ -853,7 +902,7 @@ temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2019, "elo" = 1500) #ch
 
 for(i in 1:64){
   temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
-  print(i)
+  #print(i)
 }
 
 head(temp_mm_elo)
@@ -876,19 +925,17 @@ temp <- temp %>%
   mutate(game_date = as.Date(game_date)) %>%
   filter(game_date <= "2018-03-11") # end of regular season
 
-away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
-home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+away_rows <- temp[which(temp$team_home_away == "away"), c(1,2,4,
+                                                          6,9:11,18)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1,2,4,
+                                                          6,9:11,18)]
 
-names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
-                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
-                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
-names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
-                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
-                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+names(away_rows)[c(4:8)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score")
+names(home_rows)[c(4:8)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score")
 
 cbb_season_results <- cbind(home_rows, away_rows)
 
-cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+cbb_season_results <- cbb_season_results[,-c(9,10,11)]
 
 cbb_season_results$result <- NA
 
@@ -906,6 +953,11 @@ We then need to assign an initial Elo rating for each team, we will give each te
 ```{r}
 # Join teams and initial elo rating
 temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+
+# Create ELO result column in dataframe
+cbb_season_results$home_elo_res <- rep(1500, nrow(cbb_season_results))
+cbb_season_results$away_elo_res <- rep(1500, nrow(cbb_season_results))
+
 # Name columns
 names(temp_elo) <- c("teams", "elo")
 # View first few rows of teams
@@ -915,6 +967,8 @@ head(temp_elo)
 We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
 
 ```{r}
+cbb_season_results <- arrange(cbb_season_results, game_date)
+
 # For each game in our dataset
 for(i in 1:nrow(cbb_season_results)){
   # Extract match
@@ -933,12 +987,17 @@ for(i in 1:nrow(cbb_season_results)){
   
   # Store new elo ratings for home team
   temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  cbb_season_results$home_elo_res[i] <- new_elo[1,1]
+
   # Store new elo ratings for away team
   temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+  cbb_season_results$away_elo_res[i] <- new_elo[1,2]
+
 }
 
-temp_elo$season <- 2018 # change for each year
-final_elo <- rbind(final_elo,temp_elo)
+cbb_season_results <- arrange(cbb_season_results, desc(game_date))
+
+temp_elo$season <- 2018
 ```
 
 Filter for only March Madness teams
@@ -1022,7 +1081,7 @@ temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2018, "elo" = 1500) #ch
 
 for(i in 1:64){
   temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
-  print(i)
+  #print(i)
 }
 
 head(temp_mm_elo)
@@ -1045,19 +1104,17 @@ temp <- temp %>%
   mutate(game_date = as.Date(game_date)) %>%
   filter(game_date <= "2017-03-12") # end of regular season
 
-away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
-home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+away_rows <- temp[which(temp$team_home_away == "away"), c(1,2,4,
+                                                          6,9:11,18)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1,2,4,
+                                                          6,9:11,18)]
 
-names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
-                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
-                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
-names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
-                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
-                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+names(away_rows)[c(4:8)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score")
+names(home_rows)[c(4:8)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score")
 
 cbb_season_results <- cbind(home_rows, away_rows)
 
-cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+cbb_season_results <- cbb_season_results[,-c(9,10,11)]
 
 cbb_season_results$result <- NA
 
@@ -1075,6 +1132,11 @@ We then need to assign an initial Elo rating for each team, we will give each te
 ```{r}
 # Join teams and initial elo rating
 temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+
+# Create ELO result column in dataframe
+cbb_season_results$home_elo_res <- rep(1500, nrow(cbb_season_results))
+cbb_season_results$away_elo_res <- rep(1500, nrow(cbb_season_results))
+
 # Name columns
 names(temp_elo) <- c("teams", "elo")
 # View first few rows of teams
@@ -1084,6 +1146,8 @@ head(temp_elo)
 We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
 
 ```{r}
+cbb_season_results <- arrange(cbb_season_results, game_date)
+
 # For each game in our dataset
 for(i in 1:nrow(cbb_season_results)){
   # Extract match
@@ -1102,12 +1166,17 @@ for(i in 1:nrow(cbb_season_results)){
   
   # Store new elo ratings for home team
   temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  cbb_season_results$home_elo_res[i] <- new_elo[1,1]
+
   # Store new elo ratings for away team
   temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+  cbb_season_results$away_elo_res[i] <- new_elo[1,2]
+
 }
 
-temp_elo$season <- 2017 # change for each year
-final_elo <- rbind(final_elo,temp_elo)
+cbb_season_results <- arrange(cbb_season_results, desc(game_date))
+
+temp_elo$season <- 2017
 ```
 
 Filter for only March Madness teams
@@ -1191,7 +1260,7 @@ temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2017, "elo" = 1500) #ch
 
 for(i in 1:64){
   temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
-  print(i)
+  #print(i)
 }
 
 head(temp_mm_elo)
@@ -1214,19 +1283,17 @@ temp <- temp %>%
   mutate(game_date = as.Date(game_date)) %>%
   filter(game_date <= "2016-03-13") # end of regular season
 
-away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
-home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+away_rows <- temp[which(temp$team_home_away == "away"), c(1,2,4,
+                                                          6,9:11,18)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1,2,4,
+                                                          6,9:11,18)]
 
-names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
-                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
-                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
-names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
-                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
-                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+names(away_rows)[c(4:8)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score")
+names(home_rows)[c(4:8)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score")
 
 cbb_season_results <- cbind(home_rows, away_rows)
 
-cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+cbb_season_results <- cbb_season_results[,-c(9,10,11)]
 
 cbb_season_results$result <- NA
 
@@ -1244,6 +1311,11 @@ We then need to assign an initial Elo rating for each team, we will give each te
 ```{r}
 # Join teams and initial elo rating
 temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+
+# Create ELO result column in dataframe
+cbb_season_results$home_elo_res <- rep(1500, nrow(cbb_season_results))
+cbb_season_results$away_elo_res <- rep(1500, nrow(cbb_season_results))
+
 # Name columns
 names(temp_elo) <- c("teams", "elo")
 # View first few rows of teams
@@ -1253,6 +1325,8 @@ head(temp_elo)
 We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
 
 ```{r}
+cbb_season_results <- arrange(cbb_season_results, game_date)
+
 # For each game in our dataset
 for(i in 1:nrow(cbb_season_results)){
   # Extract match
@@ -1271,12 +1345,17 @@ for(i in 1:nrow(cbb_season_results)){
   
   # Store new elo ratings for home team
   temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  cbb_season_results$home_elo_res[i] <- new_elo[1,1]
+
   # Store new elo ratings for away team
   temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+  cbb_season_results$away_elo_res[i] <- new_elo[1,2]
+
 }
 
-temp_elo$season <- 2016 # change for each year
-final_elo <- rbind(final_elo,temp_elo)
+cbb_season_results <- arrange(cbb_season_results, desc(game_date))
+
+temp_elo$season <- 2016
 ```
 
 Filter for only March Madness teams
@@ -1360,7 +1439,7 @@ temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2016, "elo" = 1500) #ch
 
 for(i in 1:64){
   temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
-  print(i)
+  #print(i)
 }
 
 head(temp_mm_elo)
@@ -1383,19 +1462,17 @@ temp <- temp %>%
   mutate(game_date = as.Date(game_date)) %>%
   filter(game_date <= "2015-03-15") # end of regular season
 
-away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
-home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+away_rows <- temp[which(temp$team_home_away == "away"), c(1,2,4,
+                                                          6,9:11,18)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1,2,4,
+                                                          6,9:11,18)]
 
-names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
-                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
-                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
-names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
-                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
-                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+names(away_rows)[c(4:8)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score")
+names(home_rows)[c(4:8)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score")
 
 cbb_season_results <- cbind(home_rows, away_rows)
 
-cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+cbb_season_results <- cbb_season_results[,-c(9,10,11)]
 
 cbb_season_results$result <- NA
 
@@ -1413,6 +1490,11 @@ We then need to assign an initial Elo rating for each team, we will give each te
 ```{r}
 # Join teams and initial elo rating
 temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+
+# Create ELO result column in dataframe
+cbb_season_results$home_elo_res <- rep(1500, nrow(cbb_season_results))
+cbb_season_results$away_elo_res <- rep(1500, nrow(cbb_season_results))
+
 # Name columns
 names(temp_elo) <- c("teams", "elo")
 # View first few rows of teams
@@ -1422,6 +1504,8 @@ head(temp_elo)
 We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
 
 ```{r}
+cbb_season_results <- arrange(cbb_season_results, game_date)
+
 # For each game in our dataset
 for(i in 1:nrow(cbb_season_results)){
   # Extract match
@@ -1440,12 +1524,17 @@ for(i in 1:nrow(cbb_season_results)){
   
   # Store new elo ratings for home team
   temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  cbb_season_results$home_elo_res[i] <- new_elo[1,1]
+
   # Store new elo ratings for away team
   temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+  cbb_season_results$away_elo_res[i] <- new_elo[1,2]
+
 }
 
-temp_elo$season <- 2015 # change for each year
-final_elo <- rbind(final_elo,temp_elo)
+cbb_season_results <- arrange(cbb_season_results, desc(game_date))
+
+temp_elo$season <- 2015
 ```
 
 Filter for only March Madness teams
@@ -1529,7 +1618,7 @@ temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2015, "elo" = 1500) #ch
 
 for(i in 1:64){
   temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
-  print(i)
+  #print(i)
 }
 
 head(temp_mm_elo)
@@ -1552,19 +1641,17 @@ temp <- temp %>%
   mutate(game_date = as.Date(game_date)) %>%
   filter(game_date <= "2014-03-16") # end of regular season
 
-away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
-home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+away_rows <- temp[which(temp$team_home_away == "away"), c(1,2,4,
+                                                          6,9:11,18)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1,2,4,
+                                                          6,9:11,18)]
 
-names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
-                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
-                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
-names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
-                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
-                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+names(away_rows)[c(4:8)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score")
+names(home_rows)[c(4:8)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score")
 
 cbb_season_results <- cbind(home_rows, away_rows)
 
-cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+cbb_season_results <- cbb_season_results[,-c(9,10,11)]
 
 cbb_season_results$result <- NA
 
@@ -1582,6 +1669,11 @@ We then need to assign an initial Elo rating for each team, we will give each te
 ```{r}
 # Join teams and initial elo rating
 temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+
+# Create ELO result column in dataframe
+cbb_season_results$home_elo_res <- rep(1500, nrow(cbb_season_results))
+cbb_season_results$away_elo_res <- rep(1500, nrow(cbb_season_results))
+
 # Name columns
 names(temp_elo) <- c("teams", "elo")
 # View first few rows of teams
@@ -1591,6 +1683,8 @@ head(temp_elo)
 We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
 
 ```{r}
+cbb_season_results <- arrange(cbb_season_results, game_date)
+
 # For each game in our dataset
 for(i in 1:nrow(cbb_season_results)){
   # Extract match
@@ -1609,12 +1703,17 @@ for(i in 1:nrow(cbb_season_results)){
   
   # Store new elo ratings for home team
   temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  cbb_season_results$home_elo_res[i] <- new_elo[1,1]
+
   # Store new elo ratings for away team
   temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+  cbb_season_results$away_elo_res[i] <- new_elo[1,2]
+
 }
 
-temp_elo$season <- 2014 # change for each year
-final_elo <- rbind(final_elo,temp_elo)
+cbb_season_results <- arrange(cbb_season_results, desc(game_date))
+
+temp_elo$season <- 2014
 ```
 
 Filter for only March Madness teams
@@ -1699,7 +1798,7 @@ temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2014, "elo" = 1500) #ch
 
 for(i in 1:64){
   temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
-  print(i)
+  #print(i)
 }
 
 head(temp_mm_elo)
@@ -1722,19 +1821,17 @@ temp <- temp %>%
   mutate(game_date = as.Date(game_date)) %>%
   filter(game_date <= "2013-03-17") # end of regular season
 
-away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
-home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
+away_rows <- temp[which(temp$team_home_away == "away"), c(1,2,4,
+                                                          6,9:11,18)]
+home_rows <- temp[which(temp$team_home_away == "home"), c(1,2,4,
+                                                          6,9:11,18)]
 
-names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
-                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
-                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
-names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
-                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
-                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
+names(away_rows)[c(4:8)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score")
+names(home_rows)[c(4:8)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score")
 
 cbb_season_results <- cbind(home_rows, away_rows)
 
-cbb_season_results <- cbb_season_results[,-c(15,16,17)]
+cbb_season_results <- cbb_season_results[,-c(9,10,11)]
 
 cbb_season_results$result <- NA
 
@@ -1752,6 +1849,11 @@ We then need to assign an initial Elo rating for each team, we will give each te
 ```{r}
 # Join teams and initial elo rating
 temp_elo <- cbind.data.frame(teams, rep(1500, length(teams)))
+
+# Create ELO result column in dataframe
+cbb_season_results$home_elo_res <- rep(1500, nrow(cbb_season_results))
+cbb_season_results$away_elo_res <- rep(1500, nrow(cbb_season_results))
+
 # Name columns
 names(temp_elo) <- c("teams", "elo")
 # View first few rows of teams
@@ -1761,6 +1863,8 @@ head(temp_elo)
 We are now ready to assign calculate Elo ratings using the historical data. As our data is in chronological order we will work from the first row and update the Elo ratings one game at a time:
 
 ```{r}
+cbb_season_results <- arrange(cbb_season_results, game_date)
+
 # For each game in our dataset
 for(i in 1:nrow(cbb_season_results)){
   # Extract match
@@ -1779,16 +1883,17 @@ for(i in 1:nrow(cbb_season_results)){
   
   # Store new elo ratings for home team
   temp_elo$elo[temp_elo$team == game$home_team] <- new_elo[1,1]
+  cbb_season_results$home_elo_res[i] <- new_elo[1,1]
+
   # Store new elo ratings for away team
   temp_elo$elo[temp_elo$team == game$away_team] <- new_elo[1,2]
+  cbb_season_results$away_elo_res[i] <- new_elo[1,2]
+
 }
 
-temp_elo$season <- 2013 # change for each year
-final_elo <- rbind(final_elo,temp_elo)
-```
+cbb_season_results <- arrange(cbb_season_results, desc(game_date))
 
-```{r}
-write.csv(final_elo, "final_elo.csv", row.names = FALSE)
+temp_elo$season <- 2013
 ```
 
 Filter for only March Madness teams
@@ -1873,7 +1978,7 @@ temp_mm_elo <- data.frame("teams" = mm_teams, "season" = 2013, "elo" = 1500) #ch
 
 for(i in 1:64){
   temp_mm_elo$elo[i] <- temp_elo[temp_elo$teams == temp_mm_elo$teams[i],]$elo
-  print(i)
+  #print(i)
 }
 
 head(temp_mm_elo)
@@ -1885,42 +1990,16 @@ mm_elo <- rbind(mm_elo, temp_mm_elo)
 total_cbb_season_results <- rbind(total_cbb_season_results , cbb_season_results)
 ```
 
+### Save the file
+
 ```{r}
 write.csv(mm_elo, "total_mm_elo.csv", row.names = FALSE)
-write.csv(total_cbb_season_results, "historic_regular_season1.csv", row.names = FALSE)
+write.csv(total_cbb_season_results, "historic_regular_season.csv", row.names = FALSE)
+
+save(mm_elo, file = "total_mm_elo.rda")
+save(total_cbb_season_results, "total_cbb_season_results.rda")
 ```
 
-
-# March Madness Games
-### 2022-2023
-
-```{r}
-temp <- load_mbb_team_box(seasons = 2023)
-
-# gameid = id
-temp <- temp %>%
-  mutate(game_date = as.Date(game_date)) %>%
-  filter(game_date > "2023-03-12")
-
-away_rows <- temp[which(temp$team_home_away == "away"), c(1:2,4,6,9:11,18,27:31,37)]
-home_rows <- temp[which(temp$team_home_away == "home"), c(1:2,4,6,9:11,18,27:31,37)]
-
-names(away_rows)[c(4:14)] <- c("away_id", "away_team", "away_mascot", "away_abbreviation", "away_score",
-                               "a_flagrant_fouls", "a_total_fouls", "a_free_throw_pct",
-                               "a_free_throws_made", "a_free_throws_attempted", "a_technical_fouls")
-names(home_rows)[c(4:14)] <- c("home_id", "home_team", "home_mascot", "home_abbreviation", "home_score",
-                               "h_flagrant_fouls", "h_total_fouls", "h_free_throw_pct",
-                               "h_free_throws_made", "h_free_throws_attempted", "h_technical_fouls")
-
-cbb_season_results <- cbind(home_rows, away_rows)
-
-cbb_season_results <- cbb_season_results[,-c(15,16,17)]
-
-cbb_season_results$result <- NA
-
-cbb_season_results$result[which(cbb_season_results$home_score > cbb_season_results$away_score)] <- 1
-cbb_season_results$result[which(cbb_season_results$home_score < cbb_season_results$away_score)] <- 0
-```
 
 
 
