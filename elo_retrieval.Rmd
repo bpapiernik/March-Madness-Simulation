@@ -1997,7 +1997,7 @@ write.csv(mm_elo, "total_mm_elo.csv", row.names = FALSE)
 write.csv(total_cbb_season_results, "historic_regular_season.csv", row.names = FALSE)
 
 save(mm_elo, file = "total_mm_elo.rda")
-save(total_cbb_season_results, "total_cbb_season_results.rda")
+save(total_cbb_season_results, file = "total_cbb_season_results.rda")
 ```
 
 
